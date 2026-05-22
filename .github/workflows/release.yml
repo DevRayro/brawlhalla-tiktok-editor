@@ -1,0 +1,133 @@
+name: Release installers
+
+# Build Windows / macOS / Linux installers when a tag like v1.0.0 is pushed.
+# Artifacts are attached to the corresponding GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0). Defaults to the tag.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = '${{ inputs.version }}'
+          if (-not $v) { $v = $env:GITHUB_REF_NAME -replace '^v','' }
+          if (-not $v) { $v = '1.0.0' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install -y innosetup
+
+      - name: Patch installer version
+        shell: pwsh
+        run: |
+          $iss = 'installers/windows/installer.iss'
+          (Get-Content $iss) -replace '#define AppVersion "[^"]+"',
+            '#define AppVersion "${{ steps.ver.outputs.version }}"' | Set-Content $iss
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installers\windows\installer.iss
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/BrawlhallaEditor-Setup-*.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          v="${{ inputs.version }}"
+          [ -z "$v" ] && v="${GITHUB_REF_NAME#v}"
+          [ -z "$v" ] && v="1.0.0"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build DMG
+        run: |
+          chmod +x installers/macos/build-dmg.sh
+          VERSION="${{ steps.ver.outputs.version }}" ./installers/macos/build-dmg.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/BrawlhallaEditor-*.dmg
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          v="${{ inputs.version }}"
+          [ -z "$v" ] && v="${GITHUB_REF_NAME#v}"
+          [ -z "$v" ] && v="1.0.0"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install appimagetool + rsync
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rsync wget fuse libfuse2 file
+          wget -q -O appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/
+
+      - name: Build AppImage
+        run: |
+          chmod +x installers/linux/build-appimage.sh
+          VERSION="${{ steps.ver.outputs.version }}" ARCH=x86_64 \
+            ./installers/linux/build-appimage.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/BrawlhallaEditor-*.AppImage
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

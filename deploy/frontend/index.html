@@ -87,12 +87,44 @@
         <div class="progress-text" id="progress-text">Préparation…</div>
       </div>
       <div class="progress-stage" id="progress-stage"></div>
+      <div class="progress-elapsed" id="progress-elapsed"></div>
       <p class="hint">Tu peux fermer la page, ton job continue. Reviens plus tard, on reprend où on en était. (◕ᴗ◕✿)</p>
+    </section>
+
+    <section id="step-seed" class="card hidden">
+      <h2>Trace Kaya <span class="kawaii">(=^･ω･^=)</span></h2>
+      <p class="seed-hint">
+        Glisse pour dessiner un rectangle autour de Kaya sur la frame ci-dessous.
+        SAM2 va le suivre pour toute la vidéo.
+      </p>
+
+      <div class="seed-controls">
+        <label class="seed-time-label">
+          <span>Frame à <span id="seed-time-val">1.0</span>s</span>
+          <input type="range" id="seed-time-slider"
+            min="0" max="20" step="0.1" value="1.0">
+        </label>
+      </div>
+
+      <div class="seed-canvas-wrap" id="seed-canvas-wrap">
+        <img id="seed-img" alt="seed frame">
+        <canvas id="seed-canvas"></canvas>
+      </div>
+
+      <div class="seed-actions">
+        <button class="btn btn-ghost" id="seed-clear">Effacer <span class="kawaii">(´• ω •`)</span></button>
+        <button class="btn btn-primary" id="seed-submit" disabled>
+          <span class="btn-cat">ᓚᘏᗢ</span>
+          <span>Lancer le tracking</span>
+          <span class="btn-cat">ᓚᘏᗢ</span>
+        </button>
+      </div>
     </section>
 
     <section id="step-done" class="card hidden">
       <h2>Ta vidéo est prête <span class="kawaii">♡(˙꒳​˙)♡</span></h2>
       <video id="result-video" controls playsinline></video>
+      <div class="timing-summary" id="timing-summary"></div>
       <div class="actions">
         <a id="download-link" class="btn btn-primary" download>
           <span>Télécharger</span>
@@ -114,6 +146,31 @@
       <span>and a lot of catgirls</span>
     </footer>
   </main>
+
+  <!-- Live system monitor (CPU / RAM / GPU). Always visible, updated every 1.5s. -->
+  <aside class="sysmon" id="sysmon" aria-label="Conso système">
+    <div class="sysmon-row">
+      <span class="sysmon-label">CPU</span>
+      <div class="sysmon-bar"><div class="sysmon-fill cpu" id="sysmon-cpu-bar"></div></div>
+      <span class="sysmon-val" id="sysmon-cpu-val">—</span>
+    </div>
+    <div class="sysmon-row">
+      <span class="sysmon-label">RAM</span>
+      <div class="sysmon-bar"><div class="sysmon-fill ram" id="sysmon-ram-bar"></div></div>
+      <span class="sysmon-val" id="sysmon-ram-val">—</span>
+    </div>
+    <div class="sysmon-row" id="sysmon-gpu-row">
+      <span class="sysmon-label">GPU</span>
+      <div class="sysmon-bar"><div class="sysmon-fill gpu" id="sysmon-gpu-bar"></div></div>
+      <span class="sysmon-val" id="sysmon-gpu-val">—</span>
+    </div>
+    <div class="sysmon-row" id="sysmon-vram-row">
+      <span class="sysmon-label">VRAM</span>
+      <div class="sysmon-bar"><div class="sysmon-fill vram" id="sysmon-vram-bar"></div></div>
+      <span class="sysmon-val" id="sysmon-vram-val">—</span>
+    </div>
+    <div class="sysmon-foot" id="sysmon-foot">…</div>
+  </aside>
 
   <script src="/static/app.js"></script>
 </body>

@@ -373,3 +373,253 @@ footer {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(1.25); }
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Live system monitor (sticky bottom-right card)                      */
+/* ------------------------------------------------------------------ */
+.sysmon {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  color: var(--ink);
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.sysmon-row {
+  display: grid;
+  grid-template-columns: 38px 1fr 56px;
+  align-items: center;
+  gap: 8px;
+}
+.sysmon-label {
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: 0.05em;
+}
+.sysmon-bar {
+  height: 8px;
+  background: rgba(255, 180, 216, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.sysmon-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 400ms cubic-bezier(0.2, 0.7, 0.2, 1),
+              background 400ms ease;
+}
+.sysmon-fill.cpu  { background: linear-gradient(90deg, #c9a0ff, #ff7eb6); }
+.sysmon-fill.ram  { background: linear-gradient(90deg, #ffb4d8, #ffd266); }
+.sysmon-fill.gpu  { background: linear-gradient(90deg, #a3e6c5, #c9a0ff); }
+.sysmon-fill.vram { background: linear-gradient(90deg, #ff7eb6, #ffd266); }
+/* Saturate when load gets high. */
+.sysmon-fill.hot {
+  filter: saturate(1.4) brightness(1.05);
+  box-shadow: 0 0 8px rgba(255, 122, 138, 0.45);
+}
+.sysmon-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+}
+.sysmon-foot {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--ink-soft);
+  text-align: center;
+  font-family: "M PLUS Rounded 1c", sans-serif;
+  letter-spacing: 0.02em;
+}
+.sysmon.collapsed { display: none; }
+
+/* On narrow screens, hide the monitor to keep things readable. */
+@media (max-width: 560px) {
+  .sysmon { display: none; }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Progress: live elapsed counter under the bar                        */
+/* ------------------------------------------------------------------ */
+.progress-elapsed {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* ------------------------------------------------------------------ */
+/* Done card: per-stage timing summary                                 */
+/* ------------------------------------------------------------------ */
+.timing-summary {
+  margin: 4px 0 18px;
+  background: var(--paper-soft);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+.timing-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.timing-total-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.timing-total-val {
+  font-family: "Mochiy Pop One", "M PLUS Rounded 1c", sans-serif;
+  font-size: 22px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.timing-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.timing-row {
+  display: grid;
+  grid-template-columns: 130px 1fr 70px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.timing-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+.timing-track {
+  height: 8px;
+  background: rgba(255, 180, 216, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.timing-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+  border-radius: 999px;
+}
+.timing-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+@media (max-width: 480px) {
+  .timing-row { grid-template-columns: 100px 1fr 60px; }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Seed picker (tight mode): drag a bbox over a video frame            */
+/* ------------------------------------------------------------------ */
+.seed-hint {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.seed-controls {
+  margin-bottom: 12px;
+}
+.seed-time-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.seed-time-label input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--paper-soft);
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  outline: none;
+}
+.seed-time-label input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(255, 126, 182, 0.4);
+}
+.seed-time-label input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.seed-canvas-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: black;
+  border: 2px solid var(--border);
+  user-select: none;
+  touch-action: none;
+}
+.seed-canvas-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.seed-canvas-wrap canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.seed-actions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+.seed-actions .btn-ghost { margin-top: 0; }
+.seed-actions .btn-primary { margin-top: 0; }
+@media (max-width: 480px) {
+  .seed-actions { grid-template-columns: 1fr; }
+}
