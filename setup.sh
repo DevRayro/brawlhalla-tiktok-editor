@@ -22,9 +22,13 @@ done
 echo "    Using $PYEXE ($($PYEXE --version))"
 
 # Try to load nvm so we can pin Node 20 even if the user's default is older.
+# Note: must run nvm in the *current* shell, not a subshell, otherwise the
+# PATH change doesn't propagate.
 [ -z "${NVM_DIR:-}" ] && export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-command -v nvm >/dev/null 2>&1 && (nvm use 20 >/dev/null 2>&1 || nvm install 20)
+if command -v nvm >/dev/null 2>&1; then
+  nvm use 20 >/dev/null 2>&1 || { nvm install 20 >/dev/null 2>&1 && nvm use 20 >/dev/null 2>&1; } || true
+fi
 
 command -v node >/dev/null 2>&1 || { echo "ERROR: node/npm not found." >&2; exit 1; }
 NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")

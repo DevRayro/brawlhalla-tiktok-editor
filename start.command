@@ -6,6 +6,18 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Load nvm if it's installed so we can use a recent Node (≥18) even when the
+# user's default is older. Must be sourced in the current shell, not a
+# subshell, or PATH won't propagate.
+if [ -z "${NVM_DIR:-}" ]; then
+  export NVM_DIR="$HOME/.nvm"
+fi
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh"
+  nvm use 20 >/dev/null 2>&1 || true
+fi
+
 # Helpful banner so the user sees something when Finder opens this Terminal.
 clear
 cat <<'EOF'
