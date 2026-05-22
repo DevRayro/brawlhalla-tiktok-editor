@@ -33,7 +33,7 @@ const cameraAt = (
 export const MainComp: React.FC<RenderInput> = (props) => {
   const frame = useCurrentFrame();
   const { fps: outFps, width: outW, height: outH } = useVideoConfig();
-  const { camera, videoSrc, audioSrc, subtitles, title, hud, framing, wideZoom } = props;
+  const { camera, videoSrc, audioSrc, baseVideo, subtitles, title, hud, framing, wideZoom } = props;
   const { width: srcW, height: srcH, fps: srcFps } = camera;
 
   const cam = cameraAt(frame, outFps, srcFps, camera.frames);
@@ -51,8 +51,30 @@ export const MainComp: React.FC<RenderInput> = (props) => {
   const wideBandH = srcH * wideFitScale;
   const wideBandBottomFrac = ((outH - wideBandH) / 2 + wideBandH) / outH;
 
+  // ---------------------------------------------------------------------
+  // FAST PATH: when baseVideo is provided, the entire visual composite
+  // (bg, fg, HUD) was pre-baked by ffmpeg with NVENC. Remotion just plays
+  // it as a single layer and overlays subtitles + title on top. Decoding
+  // one stream instead of four is dramatically faster for headless Chrome.
+  // ---------------------------------------------------------------------
   let videoLayer: React.ReactNode;
-  if (isWide) {
+  if (baseVideo) {
+    const url = staticFile(baseVideo);
+    videoLayer = (
+      <OffthreadVideo
+        src={url}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: outW,
+          height: outH,
+          display: "block",
+        }}
+        muted
+      />
+    );
+  } else if (isWide) {
     const fgW = outW;
     const fgH = wideBandH;
     const fgY = (outH - fgH) / 2;
@@ -182,8 +204,9 @@ export const MainComp: React.FC<RenderInput> = (props) => {
         bandBottomFrac={wideBandBottomFrac}
       />
 
-      {/* HP / Portrait HUD overlay (top corners) */}
-      {hud && hud.show !== false && videoSrc ? (
+      {/* HP / Portrait HUD overlay (top corners). Skipped when baseVideo is
+          provided, because the composite already contains the HUD. */}
+      {!baseVideo && hud && hud.show !== false && videoSrc ? (
         <HudOverlay
           videoSrc={videoSrc}
           srcW={srcW}

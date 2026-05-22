@@ -1,0 +1,24 @@
+# Force LF on shell scripts and dotfiles meant for Linux/macOS, otherwise
+# CRLF endings on Windows checkouts break them.
+* text=auto eol=lf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+*.sh        text eol=lf
+*.command   text eol=lf
+Makefile    text eol=lf
+
+# Binary assets — never line-end normalize.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.ico       binary
+*.icns      binary
+*.mp4       binary
+*.mov       binary
+*.mkv       binary
+*.mp3       binary
+*.wav       binary
+*.m4a       binary
+*.pt        binary
+*.pth       binary

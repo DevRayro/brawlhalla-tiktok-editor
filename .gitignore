@@ -16,6 +16,7 @@ models/
 # Remotion build artifacts
 remotion/dist/
 remotion/.cache/
+remotion/out/
 remotion/public/source.mp4
 remotion/public/audio.m4a
 remotion/public/*-source.mp4
@@ -31,3 +32,15 @@ input/*.m4a
 
 # Mascot processing artifacts
 deploy/_mascot-sources/
+
+# First-run install marker (created when setup.bat / setup.sh complete)
+.install-complete
+
+# Build outputs from the installer scripts
+dist/
+remotion/public/*-base.mp4
+
+# Optional precomputed icons (binary, not always present in fresh clone)
+installers/macos/AppIcon.icns
+installers/linux/icon.png
+installers/windows/app.ico

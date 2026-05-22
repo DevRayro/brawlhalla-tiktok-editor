@@ -118,19 +118,19 @@ def transcribe(video: Path, cache_dir: Path, extra_terms: list[str] | None = Non
 
     # Lazy import so the rest of the pipeline can be inspected without torch.
     from faster_whisper import WhisperModel
+    from . import hardware
 
-    # Auto-detect the best device. CUDA > CPU. (MPS isn't supported by
-    # faster-whisper / ctranslate2 on Apple Silicon.)
-    device = "cpu"
-    compute_type = "int8"
-    try:
-        import torch
-        if torch.cuda.is_available():
-            device = "cuda"
-            compute_type = "float16"
+    hw = hardware.detect()
+    device = hw.whisper_device
+    compute_type = hw.whisper_compute_type
+    if device == "cuda":
+        try:
+            import torch  # type: ignore
             print(f"[transcribe] CUDA detected: {torch.cuda.get_device_name(0)}")
-    except Exception:
-        pass
+        except Exception:
+            pass
+    else:
+        print(f"[transcribe] No CUDA → device={device} compute_type={compute_type}")
 
     print(f"[transcribe] Loading model {config.WHISPER_MODEL} on {device} ({compute_type})...")
     model = WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute_type)

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Entry point of the .app bundle. The actual repo lives next to the .app
+# (alongside it on the user's disk after they drag the .app into
+# /Applications, the source tree sits in ~/Library/Application Support).
+#
+# This launcher resolves the source tree, then delegates to start.command.
+set -euo pipefail
+
+# 1. Where am I (inside MyApp.app/Contents/MacOS/launcher).
+HERE="$(cd "$(dirname "$0")" && pwd)"
+APP_BUNDLE="$(cd "$HERE/../.." && pwd)"
+RESOURCES="$APP_BUNDLE/Contents/Resources"
+
+# 2. The repo source is a sibling of the launcher (we copy it into Resources
+# at build time). The first time the user runs the app, we replicate it
+# into ~/Library/Application Support/BrawlhallaEditor so that .venv and
+# downloaded models survive future app updates.
+APP_SUPPORT="$HOME/Library/Application Support/BrawlhallaEditor"
+mkdir -p "$APP_SUPPORT"
+
+if [ ! -d "$APP_SUPPORT/pipeline" ]; then
+  echo "First run — copying app to $APP_SUPPORT"
+  rsync -a --delete \
+    --exclude '.git' \
+    --exclude '.venv' \
+    --exclude '_local_jobs' \
+    --exclude 'work' \
+    --exclude 'output' \
+    --exclude 'remotion/node_modules' \
+    --exclude 'models/*.pt' \
+    "$RESOURCES/repo/" "$APP_SUPPORT/"
+fi
+
+# 3. Hand off to the standard launcher.
+exec bash "$APP_SUPPORT/start.command"

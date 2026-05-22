@@ -117,6 +117,14 @@ def cache_key(*paths: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def cache_key_str(*parts: str) -> str:
+    """Hash of arbitrary string parameters, for cache invalidation."""
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(p.encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
 def run(cmd: list[str], **kwargs: Any) -> None:
     """Run a subprocess, stream output, raise on failure."""
     print(f"[run] {' '.join(str(c) for c in cmd)}")

@@ -46,6 +46,9 @@ export type HudConfig = {
 export type RenderInput = {
   videoSrc: string;
   audioSrc: string;
+  /** When set, the visual background (bg + fg + HUD) is already baked into
+   *  this composite video. Remotion only overlays subtitles and title. */
+  baseVideo?: string;
   fps: number;
   outFps: number;
   outWidth: number;

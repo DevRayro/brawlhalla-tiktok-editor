@@ -1,70 +1,85 @@
 #!/usr/bin/env bash
-# One-time setup for the Brawlhalla TikTok auto-editor pipeline.
+# Cross-platform setup for the Brawlhalla TikTok auto-editor.
+# Detects the OS and GPU, installs the matching PyTorch wheel + SAM2.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 echo "==> Checking system dependencies"
-for bin in ffmpeg ffprobe python3; do
-  if ! command -v "$bin" >/dev/null 2>&1; then
+for bin in ffmpeg ffprobe; do
+  command -v "$bin" >/dev/null 2>&1 || {
     echo "ERROR: $bin not found. Install it first." >&2
     exit 1
-  fi
+  }
 done
 
+# Pick the Python interpreter. Prefer 3.11/3.12 (best compat with pinned deps).
+PYEXE=""
+for cand in python3.11 python3.12 python3.10 python3; do
+  command -v "$cand" >/dev/null 2>&1 && PYEXE="$cand" && break
+done
+[ -z "$PYEXE" ] && { echo "ERROR: python3 not found" >&2; exit 1; }
+echo "    Using $PYEXE ($($PYEXE --version))"
+
 # Try to load nvm so we can pin Node 20 even if the user's default is older.
-if [ -z "${NVM_DIR:-}" ]; then
-  export NVM_DIR="$HOME/.nvm"
-fi
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-  # shellcheck disable=SC1091
-  . "$NVM_DIR/nvm.sh"
-fi
-if command -v nvm >/dev/null 2>&1; then
-  nvm use 20 >/dev/null 2>&1 || nvm install 20
-fi
+[ -z "${NVM_DIR:-}" ] && export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+command -v nvm >/dev/null 2>&1 && (nvm use 20 >/dev/null 2>&1 || nvm install 20)
 
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  echo "ERROR: node/npm not found." >&2
-  exit 1
-fi
-
+command -v node >/dev/null 2>&1 || { echo "ERROR: node/npm not found." >&2; exit 1; }
 NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "ERROR: Node 18+ required (found $(node --version)). Install Node 20 (e.g. 'nvm install 20')." >&2
-  exit 1
-fi
+[ "$NODE_MAJOR" -lt 18 ] && { echo "ERROR: Node 18+ required (found $(node --version))." >&2; exit 1; }
 echo "    Using Node $(node --version)"
 
 echo "==> Creating Python venv at .venv"
-if [ ! -d .venv ]; then
-  python3 -m venv .venv
-fi
+[ -d .venv ] || $PYEXE -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-echo "==> Installing Python dependencies"
+echo "==> Installing base Python dependencies"
 pip install --upgrade pip wheel >/dev/null
 pip install -r pipeline/requirements.txt
 
-# Install CUDA-enabled torch for NVIDIA users (Linux/WSL). Detected via
-# `nvidia-smi`. faster-whisper picks up CUDA automatically when torch.cuda
-# is available, giving a ~50× speedup on Whisper.
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-    echo "==> NVIDIA GPU detected, installing CUDA build of torch"
-    pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cu121
-    # cuDNN libs needed by faster-whisper / ctranslate2 on GPU.
-    pip install nvidia-cudnn-cu12==9.* || true
-fi
+# ----- Torch installation tuned to the local hardware -----
+OS_NAME=$(uname -s)
+TORCH_INDEX=""
+case "$OS_NAME" in
+  Darwin)
+    echo "==> macOS detected, installing default torch (MPS-capable on Apple Silicon)"
+    pip install --upgrade torch torchvision
+    ;;
+  Linux|*)
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+      GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
+      echo "    GPU: $GPU_NAME"
+      # Blackwell (RTX 50xx) requires CUDA 12.8 wheels; everything older runs
+      # on cu121.
+      if printf '%s' "$GPU_NAME" | grep -Eqi 'RTX 50|Blackwell'; then
+        TORCH_INDEX=https://download.pytorch.org/whl/cu128
+        echo "==> Blackwell detected, installing CUDA 12.8 build of torch"
+      else
+        TORCH_INDEX=https://download.pytorch.org/whl/cu121
+        echo "==> NVIDIA detected, installing CUDA 12.1 build of torch"
+      fi
+      pip install --upgrade torch torchvision --index-url "$TORCH_INDEX"
+      pip install nvidia-cudnn-cu12==9.* || true
+    else
+      echo "==> No NVIDIA GPU detected, installing CPU build of torch"
+      pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cpu
+    fi
+    ;;
+esac
 
-echo "==> Downloading SAM2 checkpoint (~180MB) [optional, used by tight_tracker=sam2]"
+echo "==> Installing SAM 2 (no-deps)"
+pip install --no-deps "SAM-2 @ git+https://github.com/facebookresearch/sam2.git" || \
+  echo "    SAM-2 install failed (non-fatal, tracker will fall back to action_tracker)"
+
+echo "==> Downloading SAM2 checkpoint (~180MB)"
 mkdir -p models
 if [ ! -f models/sam2.1_hiera_small.pt ]; then
   curl -L --fail -o models/sam2.1_hiera_small.pt \
     https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt || \
-    echo "    Download failed (skipping; SAM2 backend is optional)."
-else
-  echo "    Already present."
+    echo "    Download failed (non-fatal, SAM2 backend will fall back)."
 fi
 
 echo "==> Installing Remotion dependencies"
@@ -76,4 +91,4 @@ else
 fi
 cd ..
 
-echo "==> Setup complete. Run ./run.sh to process a video."
+echo "==> Setup complete. Run ./start.sh (or start.command on macOS) to launch."
