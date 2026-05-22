@@ -50,7 +50,7 @@ def _set_status(job_id: str, **fields) -> None:
 
 
 def run_pipeline(job_id: str) -> None:
-    """Same shape as the Modal worker, but synchronous and using local paths."""
+    """Run the full pipeline for a single job, synchronously, in this process."""
     # Re-import inside the thread (avoids issues on Windows with fork-vs-spawn).
     from pipeline import config
     from pipeline.modules import audiomix, camera, io_utils, transcribe
