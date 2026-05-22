@@ -75,7 +75,7 @@ Brawlhalla TikTok Editor — installation sur macOS
    - Ouvre le Terminal (Spotlight → "Terminal")
    - Colle cette ligne et fais Entrée :
 
-       xattr -cr /Applications/BrawlhallaEditor.app
+       find /Applications/BrawlhallaEditor.app -exec xattr -c {} \;
 
    - Réessaie d'ouvrir l'app.
 
