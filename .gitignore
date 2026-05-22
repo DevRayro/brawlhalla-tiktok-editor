@@ -44,3 +44,4 @@ remotion/public/*-base.mp4
 installers/macos/AppIcon.icns
 installers/linux/icon.png
 installers/windows/app.ico
+_dmg_test/
