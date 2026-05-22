@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Entry point of the .app bundle. The actual repo lives next to the .app
-# (alongside it on the user's disk after they drag the .app into
-# /Applications, the source tree sits in ~/Library/Application Support).
+# Entry point of the .app bundle. Finder doesn't open a Terminal for .app
+# bundles, so our installation/setup script (start.command) would run
+# blindly with no UI. We work around it by:
 #
-# This launcher resolves the source tree, then delegates to start.command.
+#   1. Copying the repo source from the bundle's Resources/ into
+#      ~/Library/Application Support/BrawlhallaEditor (so .venv, downloaded
+#      models, and per-user state survive app updates).
+#
+#   2. Asking Terminal.app to open start.command in a real, visible window.
+#      The user sees install progress, can read errors, and can Ctrl+C if
+#      something goes wrong.
 set -euo pipefail
 
-# 1. Where am I (inside MyApp.app/Contents/MacOS/launcher).
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_BUNDLE="$(cd "$HERE/../.." && pwd)"
 RESOURCES="$APP_BUNDLE/Contents/Resources"
 
-# 2. The repo source is a sibling of the launcher (we copy it into Resources
-# at build time). The first time the user runs the app, we replicate it
-# into ~/Library/Application Support/BrawlhallaEditor so that .venv and
-# downloaded models survive future app updates.
 APP_SUPPORT="$HOME/Library/Application Support/BrawlhallaEditor"
 mkdir -p "$APP_SUPPORT"
 
 if [ ! -d "$APP_SUPPORT/pipeline" ]; then
-  echo "First run — copying app to $APP_SUPPORT"
   rsync -a --delete \
     --exclude '.git' \
     --exclude '.venv' \
@@ -31,5 +31,10 @@ if [ ! -d "$APP_SUPPORT/pipeline" ]; then
     "$RESOURCES/repo/" "$APP_SUPPORT/"
 fi
 
-# 3. Hand off to the standard launcher.
-exec bash "$APP_SUPPORT/start.command"
+# Make sure start.command is up to date with what we just shipped — without
+# this, an app update wouldn't propagate launcher fixes to existing installs.
+cp -f "$RESOURCES/repo/start.command" "$APP_SUPPORT/start.command" 2>/dev/null || true
+chmod +x "$APP_SUPPORT/start.command"
+
+# Open in Terminal.app so the user actually sees the setup progress.
+open -a Terminal "$APP_SUPPORT/start.command"
