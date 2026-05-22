@@ -1,0 +1,33 @@
+.venv/
+node_modules/
+work/
+output/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
+# Local server runtime files
+_local_jobs/
+
+# Big model checkpoints (downloaded by setup, don't commit)
+models/
+
+# Remotion build artifacts
+remotion/dist/
+remotion/.cache/
+remotion/public/source.mp4
+remotion/public/audio.m4a
+remotion/public/*-source.mp4
+remotion/public/*-audio.m4a
+
+# Local user inputs (don't commit other people's clips)
+input/*.mp4
+input/*.mov
+input/*.mkv
+input/*.mp3
+input/*.wav
+input/*.m4a
+
+# Mascot processing artifacts
+deploy/_mascot-sources/

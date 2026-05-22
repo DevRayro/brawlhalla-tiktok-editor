@@ -1,0 +1,161 @@
+# Brawlhalla / Smash technical lexicon for Whisper bias
+# One term per line. Comments (#) ignored. Used as `initial_prompt` for the
+# transcription. Whisper's prompt is capped at ~244 tokens so we curate the
+# most-used terms (legends actually mentioned, common attack moves).
+#
+# To add a custom term for a single video, add it under `extra_terms:` in
+# input/notes.md instead of editing this file.
+
+# === Legends (most popular) ===
+Kaya
+Kaya Goldforged
+KayaGF
+Bödvar
+Cassidy
+Orion
+Vraxx
+Gnash
+Queen Nai
+Hattori
+Ulgrim
+Azoth
+Koji
+Diana
+Jhala
+Wu Shang
+Val
+Ragnir
+Cross
+Mirage
+Nix
+Mordex
+Yumiko
+Artemis
+Caspian
+Sidra
+Teros
+Brynn
+Asuri
+Ember
+Sentinel
+Lucien
+Zariel
+Scarlet
+Jaeyun
+Reno
+Mako
+Magyar
+Onyx
+Petra
+Vector
+Volkov
+Xull
+Thatch
+Loki
+Dusk
+Fait
+Thor
+Roland
+Ada
+Tezca
+Hanzo
+Munin
+Red Raptor
+Bo
+Dim
+Gaia
+Ankhu
+Lin Fei
+Lord Vraxx
+
+# === Weapons ===
+lance
+sword
+hammer
+axe
+spear
+bow
+gauntlets
+scythe
+katar
+blasters
+orb
+rocket lance
+greatsword
+battleboots
+
+# === Moves / mécaniques Brawlhalla ===
+signature
+sig
+n-sig
+neutral-sig
+side-sig
+down-sig
+light
+heavy
+n-light
+neutral-light
+side-light
+s-light
+down-light
+n-air
+neutral-air
+side-air
+down-air
+recovery
+gravity cancel
+dodge
+dash
+dash attack
+jab
+neutral
+side
+down
+ground pound
+ringout
+gimp
+edgeguard
+spike
+chase dodge
+spot dodge
+chain
+true combo
+read
+
+# === Smash Bros (terms souvent utilisés en commentaire FR) ===
+dair
+nair
+fair
+uair
+bair
+sair
+neutral B
+side B
+up B
+down B
+percent
+stock
+ledge
+DI
+SDI
+sweetspot
+l-cancel
+wavedash
+short hop
+shield
+grab
+throw
+
+# === FR slang gaming ===
+clutch
+free
+gank
+sweat
+EZ
+GG
+miss
+combo
+zone
+punish
+read
+mindgame

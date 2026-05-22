@@ -1,0 +1,33 @@
+# Core
+numpy==1.26.4
+scipy==1.13.1
+pyyaml==6.0.2
+tqdm==4.66.5
+
+# Video / audio I/O
+# We need opencv-contrib-python for the CSRT tracker (legacy module).
+opencv-contrib-python==4.10.0.84
+
+# Transcription (word-level timestamps).
+# faster-whisper bundles ctranslate2; no torch needed for transcription.
+faster-whisper==1.0.3
+# Pin huggingface_hub to a 0.x version — faster-whisper 1.0.3 isn't compatible
+# with the new 1.x API (and uses `requests` which isn't auto-installed).
+huggingface_hub==0.25.2
+requests==2.32.3
+
+# Tracking — SAM 2 (Meta). Apache 2.0.
+# We install torch ourselves (CPU/MPS only — no CUDA needed on macOS) and pull
+# SAM2 from Meta's official repo.
+torch==2.4.1
+torchvision==0.19.1
+pillow==12.2.0
+hydra-core==1.3.2
+iopath==0.1.10
+omegaconf==2.3.0
+SAM-2 @ git+https://github.com/facebookresearch/sam2.git
+
+# Local web UI (FastAPI server bundled with the launcher).
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+python-multipart==0.0.20

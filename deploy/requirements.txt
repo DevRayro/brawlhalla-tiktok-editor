@@ -1,0 +1,13 @@
+# Cloud-only requirements (Modal). Excludes SAM2/torch since the default
+# tracker is the action-centroid backend, which only needs OpenCV + numpy.
+# (Keep pipeline/requirements.txt for local dev with optional SAM2 backend.)
+numpy==1.26.4
+scipy==1.13.1
+pyyaml==6.0.2
+tqdm==4.66.5
+
+opencv-contrib-python-headless==4.10.0.84
+
+faster-whisper==1.0.3
+huggingface_hub==0.25.2
+requests==2.32.3

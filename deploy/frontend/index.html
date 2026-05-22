@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>にゃ〜 Brawlhalla TikTok Editor 〜♡</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&family=M+PLUS+Rounded+1c:wght@400;500;700;900&family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <!-- Sakura petals raining in the background (CSS-only) -->
+  <div class="sakura" aria-hidden="true">
+    <span style="--x:5%; --d:8s; --del:0s">🌸</span>
+    <span style="--x:14%; --d:11s; --del:2s">🌸</span>
+    <span style="--x:28%; --d:9s; --del:4s">🌸</span>
+    <span style="--x:42%; --d:13s; --del:1s">🌸</span>
+    <span style="--x:58%; --d:10s; --del:6s">🌸</span>
+    <span style="--x:71%; --d:12s; --del:3s">🌸</span>
+    <span style="--x:84%; --d:9s; --del:7s">🌸</span>
+    <span style="--x:93%; --d:11s; --del:5s">🌸</span>
+  </div>
+
+  <main class="page">
+    <header class="hero">
+      <!-- Mascotte aléatoire chargée par app.js depuis /static/mascots/ -->
+      <img class="mascot" id="mascot-img" alt="" aria-hidden="true">
+
+      <div class="title-block">
+        <div class="kanji">ブロウルハラ・エディター</div>
+        <h1>Brawlhalla TikTok Editor</h1>
+        <p class="tagline">てぇへっ <span class="sparkle">✨</span> Dépose ton replay, je te fais un short kawaii ♡</p>
+      </div>
+    </header>
+
+    <section id="step-upload" class="card">
+      <h2><span class="num">①</span> Tes fichiers <span class="kawaii">(｡•ᴗ•｡)</span></h2>
+
+      <label class="dropzone" id="video-drop">
+        <input type="file" id="video-input" accept="video/*" hidden>
+        <div class="dz-icon">🎮</div>
+        <div class="dz-title">Vidéo replay <span class="req">*</span></div>
+        <div class="dz-hint">glisse-dépose ou clique · MP4 / MOV / MKV</div>
+        <div class="dz-file" id="video-name"></div>
+      </label>
+
+      <label class="dropzone secondary" id="music-drop">
+        <input type="file" id="music-input" accept="audio/*" hidden>
+        <div class="dz-icon">🎀</div>
+        <div class="dz-title">Musique de fond <span class="opt">facultatif</span></div>
+        <div class="dz-hint">MP3 / WAV / M4A</div>
+        <div class="dz-file" id="music-name"></div>
+      </label>
+
+      <h2 style="margin-top:32px"><span class="num">②</span> Réglages <span class="kawaii">٩(◕‿◕)۶</span></h2>
+
+      <div class="row">
+        <label class="field">
+          <span>Cadrage</span>
+          <select id="framing">
+            <option value="wide" selected>Large 〜 toute l'action visible</option>
+            <option value="tight">Serré 9:16 〜 suit l'action</option>
+          </select>
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>Notes pour l'IA <span class="kawaii">＾• ω •＾</span></summary>
+        <textarea id="notes" rows="4" placeholder="Termes spécifiques à reconnaitre, moments-clés à mettre en avant, etc."></textarea>
+      </details>
+
+      <button class="btn btn-primary" id="submit-btn" disabled>
+        <span class="btn-cat">ᓚᘏᗢ</span>
+        <span>Lancer l'édition</span>
+        <span class="btn-cat">ᓚᘏᗢ</span>
+      </button>
+    </section>
+
+    <section id="step-progress" class="card hidden">
+      <h2>En cours… <span class="kawaii spin-bounce">(｡•ᴗ•｡)</span></h2>
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+          <span class="progress-cat" id="progress-cat">＾• ω •＾</span>
+        </div>
+        <div class="progress-text" id="progress-text">Préparation…</div>
+      </div>
+      <div class="progress-stage" id="progress-stage"></div>
+      <p class="hint">Tu peux fermer la page, ton job continue. Reviens plus tard, on reprend où on en était. (◕ᴗ◕✿)</p>
+    </section>
+
+    <section id="step-done" class="card hidden">
+      <h2>Ta vidéo est prête <span class="kawaii">♡(˙꒳​˙)♡</span></h2>
+      <video id="result-video" controls playsinline></video>
+      <div class="actions">
+        <a id="download-link" class="btn btn-primary" download>
+          <span>Télécharger</span>
+          <span class="btn-cat">⌒(ㅇㅅㅇ❀)⌒</span>
+        </a>
+        <button class="btn btn-ghost" id="restart-btn">Nouveau clip <span class="kawaii">(=^･ω･^=)</span></button>
+      </div>
+    </section>
+
+    <section id="step-error" class="card hidden">
+      <h2>Aïe <span class="kawaii">(╥﹏╥)</span></h2>
+      <pre id="error-text" class="error"></pre>
+      <button class="btn btn-ghost" id="error-retry">Réessayer (◔◡◔)</button>
+    </section>
+
+    <footer>
+      <span>made with</span>
+      <span class="heart">♡</span>
+      <span>and a lot of catgirls</span>
+    </footer>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
