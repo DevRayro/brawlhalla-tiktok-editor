@@ -45,3 +45,4 @@ remotion/public/*-base.mp4
 # without needing Pillow / iconutil).
 icons/icon-*.png
 _dmg_test/
+_*.jpeg
