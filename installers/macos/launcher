@@ -19,17 +19,27 @@ RESOURCES="$APP_BUNDLE/Contents/Resources"
 APP_SUPPORT="$HOME/Library/Application Support/BrawlhallaEditor"
 mkdir -p "$APP_SUPPORT"
 
-if [ ! -d "$APP_SUPPORT/pipeline" ]; then
-  rsync -a --delete \
-    --exclude '.git' \
-    --exclude '.venv' \
-    --exclude '_local_jobs' \
-    --exclude 'work' \
-    --exclude 'output' \
-    --exclude 'remotion/node_modules' \
-    --exclude 'models/*.pt' \
-    "$RESOURCES/repo/" "$APP_SUPPORT/"
-fi
+# Sync the bundled repo source into Application Support on EVERY launch, so
+# that reinstalling a newer .dmg actually delivers the new code. We exclude
+# user state (.venv, models, _local_jobs, etc.) so reinstalls don't blow
+# away downloaded models or in-progress jobs.
+#
+# Without this, the very first launch would copy the source, and every
+# subsequent launch (even after replacing the .app with a newer DMG) would
+# silently keep running the old code. The in-app updater could fix it, but
+# only if /api/version exists — which is itself code added in a later
+# release. Hence the sync-on-launch.
+rsync -a --delete \
+  --exclude '.git' \
+  --exclude '.venv' \
+  --exclude '_local_jobs' \
+  --exclude 'work' \
+  --exclude 'output' \
+  --exclude 'remotion/node_modules' \
+  --exclude 'remotion/public' \
+  --exclude 'models/*.pt' \
+  --exclude 'input' \
+  "$RESOURCES/repo/" "$APP_SUPPORT/"
 
 # Make sure start.command is up to date with what we just shipped — without
 # this, an app update wouldn't propagate launcher fixes to existing installs.
