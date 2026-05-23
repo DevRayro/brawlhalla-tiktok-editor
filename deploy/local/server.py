@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from deploy.local import updater  # noqa: E402
+from deploy.local import audio_url  # noqa: E402
 
 
 # In-process job registry.
@@ -409,6 +410,7 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 async def upload(
     video: UploadFile = File(...),
     music: UploadFile = File(None),
+    music_url: str = Form(""),
     notes: str = Form(""),
     framing: str = Form("wide"),
     title: str = Form(""),
@@ -423,11 +425,39 @@ async def upload(
         while chunk := await video.read(1 << 20):
             f.write(chunk)
 
+    # Music can come either as an uploaded file OR as a URL we'll yt-dlp.
+    # Uploaded file wins if both are provided.
     if music and music.filename:
         music_path = in_dir / music.filename
         with music_path.open("wb") as f:
             while chunk := await music.read(1 << 20):
                 f.write(chunk)
+    elif music_url and music_url.strip():
+        url = music_url.strip()
+        if not audio_url.is_supported_url(url):
+            raise HTTPException(
+                400,
+                "URL musicale non supportée (YouTube, SoundCloud, Bandcamp, "
+                "Vimeo, Dailymotion, Twitch, Mixcloud, ou MP3 direct).",
+            )
+        # Download synchronously inside the upload handler. yt-dlp can take
+        # 10-60s on a typical track; the frontend already shows a "Téléversement"
+        # spinner during the upload POST so this just extends that wait.
+        try:
+            def _progress(pct: int, msg: str) -> None:
+                # Stream progress into the job status BEFORE the pipeline thread
+                # starts, so the UI sees something even if the download is slow.
+                _set_status(
+                    job_id,
+                    stage="audio_url",
+                    progress=max(0, min(99, int(pct))),
+                    message=f"Téléchargement musique : {msg}",
+                )
+            _set_status(job_id, stage="audio_url", progress=1,
+                        message="Téléchargement musique…")
+            audio_url.download(url, in_dir, progress=_progress)
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(400, f"Téléchargement musique échoué : {e}")
 
     frontmatter = (
         "---\n"

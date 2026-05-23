@@ -170,6 +170,56 @@ html, body {
 .req { color: var(--danger); font-weight: 700; }
 .opt { color: var(--ink-soft); font-weight: 400; font-size: 13px; }
 
+/* Music URL field — alternative to the upload dropzone */
+.music-url-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+}
+.music-url-or {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  background: var(--paper-soft);
+  padding: 2px 12px;
+  border-radius: 999px;
+  border: 1.5px dashed var(--border);
+}
+.music-url-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--paper-soft);
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.music-url-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(255, 126, 182, 0.15);
+}
+.music-url-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.music-url-field input {
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  padding: 4px 0;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+.music-url-field input::placeholder { color: var(--ink-soft); opacity: 0.7; }
+.music-url-hint { color: var(--ink-soft); font-size: 12px; }
+
 /* Form */
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 480px) { .row { grid-template-columns: 1fr; } }

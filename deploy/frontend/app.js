@@ -8,6 +8,7 @@ const els = {
   musicDrop: document.getElementById("music-drop"),
   musicInput: document.getElementById("music-input"),
   musicName: document.getElementById("music-name"),
+  musicUrlInput: document.getElementById("music-url-input"),
 
   framing: document.getElementById("framing"),
   notes: document.getElementById("notes"),
@@ -79,6 +80,7 @@ function fmtDuration(s) {
 const STAGE_LABELS = {
   queued: "File d'attente",
   discover: "Lecture des fichiers",
+  audio_url: "Téléchargement musique",
   transcribe: "Transcription (Whisper)",
   await_seed: "En attente du seed Kaya",
   track: "Tracking",
@@ -122,22 +124,44 @@ setupDropzone(els.videoDrop, els.videoInput, (f) => {
 setupDropzone(els.musicDrop, els.musicInput, (f) => {
   musicFile = f;
   els.musicName.textContent = `${f.name} · ${fmtBytes(f.size)}`;
+  // Uploading a file overrides any URL the user typed before.
+  if (els.musicUrlInput) els.musicUrlInput.value = "";
+});
+
+// Typing a URL clears any uploaded file (the two are mutually exclusive).
+els.musicUrlInput?.addEventListener("input", () => {
+  if (els.musicUrlInput.value.trim()) {
+    musicFile = null;
+    els.musicInput.value = "";
+    els.musicName.textContent = "";
+    els.musicDrop.classList.remove("has-file");
+  }
 });
 
 els.submit.addEventListener("click", async () => {
   if (!videoFile) return;
   const fd = new FormData();
   fd.append("video", videoFile);
-  if (musicFile) fd.append("music", musicFile);
+  if (musicFile) {
+    fd.append("music", musicFile);
+  } else if (els.musicUrlInput && els.musicUrlInput.value.trim()) {
+    fd.append("music_url", els.musicUrlInput.value.trim());
+  }
   fd.append("framing", els.framing.value);
   fd.append("notes", els.notes.value || "");
 
   goTo("progress");
-  setProgress(2, "Téléversement…");
+  const usingUrl = !musicFile && els.musicUrlInput && els.musicUrlInput.value.trim();
+  setProgress(2, usingUrl ? "Téléchargement de la musique…" : "Téléversement…");
 
   try {
     const res = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error(`Upload échoué (${res.status})`);
+    if (!res.ok) {
+      // Try to surface the server's error message (HTTP 400 from yt-dlp etc.).
+      let detail = "";
+      try { detail = (await res.json()).detail || ""; } catch {}
+      throw new Error(detail || `Upload échoué (${res.status})`);
+    }
     const { job_id } = await res.json();
     localStorage.setItem(ACTIVE_JOB_KEY, job_id);
     pollStatus(job_id);
@@ -267,6 +291,7 @@ els.restartBtn.addEventListener("click", () => {
   els.musicName.textContent = "";
   els.videoDrop.classList.remove("has-file");
   els.musicDrop.classList.remove("has-file");
+  if (els.musicUrlInput) els.musicUrlInput.value = "";
   els.notes.value = "";
   els.submit.disabled = true;
   goTo("upload");
