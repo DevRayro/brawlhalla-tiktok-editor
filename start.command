@@ -99,4 +99,20 @@ echo
 echo "==> Lancement du serveur. Ouverture du navigateur sur http://127.0.0.1:8765 …"
 echo "    Ctrl+C dans cette fenêtre pour arrêter."
 echo
-exec python3 deploy/local/server.py
+
+# Restart loop: when the server self-updates, it exits with code 75 and we
+# relaunch automatically (so the new code takes effect).
+while true; do
+  set +e
+  python3 deploy/local/server.py
+  rc=$?
+  set -e
+  if [ "$rc" = "75" ] || [ -f .restart-requested ]; then
+    rm -f .restart-requested
+    echo
+    echo "==> Mise à jour appliquée — redémarrage du serveur…"
+    sleep 1
+    continue
+  fi
+  exit $rc
+done

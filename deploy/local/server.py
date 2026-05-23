@@ -31,6 +31,8 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+from deploy.local import updater  # noqa: E402
+
 
 # In-process job registry.
 JOBS: dict[str, dict] = {}
@@ -756,6 +758,74 @@ async def download(job_id: str):
         media_type="video/mp4",
         filename=f"brawlhalla-{job_id}.mp4",
     )
+
+
+# ---------------------------------------------------------------------------
+# Self-update endpoints
+# ---------------------------------------------------------------------------
+
+# When updater.apply() finishes successfully we ask the parent process to
+# restart us. Because uvicorn doesn't have a clean "restart" primitive, we
+# write a "restart needed" flag and have the launcher (start.sh / start.bat /
+# start.command) re-run the server when it sees that flag on shutdown.
+RESTART_FLAG = ROOT / ".restart-requested"
+
+
+def _restart_after_delay(delay_s: float = 1.5) -> None:
+    """Set the restart flag, then exit the process with code 75 (EX_TEMPFAIL)
+    which the launcher script interprets as 'please re-run me'."""
+    def _kill():
+        time.sleep(delay_s)
+        try:
+            RESTART_FLAG.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
+        # Exit 75 is the convention; launcher scripts loop on it.
+        import os as _os
+        _os._exit(75)
+    threading.Thread(target=_kill, daemon=True).start()
+
+
+@app.get("/api/version")
+async def version():
+    """Compare local install version against the latest GitHub release."""
+    try:
+        info = updater.check(ROOT)
+        return JSONResponse({
+            "current": info.current,
+            "latest": info.latest,
+            "update_available": info.update_available,
+            "notes": info.notes,
+            "published_at": info.published_at,
+        })
+    except Exception as e:
+        # Don't fail loud — the version check is non-essential.
+        return JSONResponse({
+            "current": updater._read_local_version(ROOT),
+            "latest": None,
+            "update_available": False,
+            "error": str(e),
+        }, status_code=200)
+
+
+@app.post("/api/update")
+async def trigger_update():
+    """Kick off the update in the background. Poll /api/update/status for progress."""
+    cur = updater.state()
+    if cur.get("stage") in ("downloading", "extracting", "deps"):
+        raise HTTPException(409, "update already in progress")
+    updater.apply_async(ROOT)
+    return {"ok": True}
+
+
+@app.get("/api/update/status")
+async def update_status():
+    st = updater.state()
+    if st.get("stage") == "done" and st.get("progress") == 100 and not RESTART_FLAG.exists():
+        # Schedule restart once we've reported done to the client.
+        _restart_after_delay()
+    return JSONResponse(st)
+
 
 
 def _open_browser_when_ready() -> None:

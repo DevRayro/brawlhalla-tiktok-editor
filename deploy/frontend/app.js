@@ -549,3 +549,111 @@ els.seedSubmit?.addEventListener("click", async () => {
     showError(`Erreur soumission seed: ${err.message}`);
   }
 });
+
+
+// ───────────────────────────────────────────────────────────────────────
+// Self-update flow
+// ───────────────────────────────────────────────────────────────────────
+
+const updateEls = {
+  banner: document.getElementById("update-banner"),
+  version: document.getElementById("ub-version"),
+  btnUpdate: document.getElementById("ub-update"),
+  btnClose: document.getElementById("ub-close"),
+  overlay: document.getElementById("update-overlay"),
+  fill: document.getElementById("uo-fill"),
+  msg: document.getElementById("uo-msg"),
+  title: document.getElementById("uo-title"),
+};
+
+const UPDATE_DISMISSED_KEY = "brawlhalla:update-dismissed";
+
+async function checkForUpdates() {
+  try {
+    const r = await fetch("/api/version");
+    if (!r.ok) return;
+    const v = await r.json();
+    if (!v || !v.update_available) return;
+    if (localStorage.getItem(UPDATE_DISMISSED_KEY) === v.latest) return;
+    updateEls.version.textContent = `v${v.current} → v${v.latest}`;
+    updateEls.banner.dataset.latest = v.latest;
+    updateEls.banner.classList.remove("hidden");
+  } catch {
+    // network or local server not reachable — ignore
+  }
+}
+
+updateEls.btnClose.addEventListener("click", () => {
+  const latest = updateEls.banner.dataset.latest;
+  if (latest) localStorage.setItem(UPDATE_DISMISSED_KEY, latest);
+  updateEls.banner.classList.add("hidden");
+});
+
+updateEls.btnUpdate.addEventListener("click", async () => {
+  updateEls.banner.classList.add("hidden");
+  updateEls.overlay.classList.remove("hidden");
+  updateEls.title.textContent = "Mise à jour en cours…";
+  updateEls.msg.textContent = "Démarrage…";
+  updateEls.fill.style.width = "0%";
+
+  try {
+    const r = await fetch("/api/update", { method: "POST" });
+    if (!r.ok && r.status !== 409) {
+      throw new Error(`HTTP ${r.status}`);
+    }
+  } catch (e) {
+    updateEls.title.textContent = "Échec";
+    updateEls.msg.textContent = e.message || String(e);
+    return;
+  }
+
+  // Poll the update status until it's done or errors out.
+  let serverWentDown = false;
+  const poll = setInterval(async () => {
+    try {
+      const r = await fetch("/api/update/status");
+      if (!r.ok) return;
+      const st = await r.json();
+      updateEls.fill.style.width = `${Math.max(0, Math.min(100, st.progress || 0))}%`;
+      updateEls.msg.textContent = st.message || "…";
+
+      if (st.stage === "done") {
+        updateEls.title.textContent = "Redémarrage…";
+        // Wait for the server to come back, then reload the page.
+        clearInterval(poll);
+        waitForServerThenReload();
+      } else if (st.stage === "error") {
+        clearInterval(poll);
+        updateEls.title.textContent = "Échec";
+        updateEls.msg.textContent = st.error || st.message || "Erreur inconnue";
+      }
+    } catch {
+      // Server is restarting → polls will fail briefly. Mark it and let the
+      // wait-for-comeback logic handle it.
+      serverWentDown = true;
+    }
+  }, 1000);
+});
+
+async function waitForServerThenReload() {
+  // Server exits with code 75 → launcher restarts it. Usually back in <5s.
+  // Try up to 60s, then fall back to a hard reload.
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch("/api/version", { cache: "no-store" });
+      if (r.ok) {
+        location.reload();
+        return;
+      }
+    } catch {
+      // not yet
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  location.reload();
+}
+
+// Run the update check on load + once an hour after that.
+checkForUpdates();
+setInterval(checkForUpdates, 60 * 60 * 1000);

@@ -51,4 +51,18 @@ if [ ! -d remotion/node_modules ]; then
   (cd remotion && npm install --no-audit --no-fund)
 fi
 
-python3 deploy/local/server.py
+# Restart loop: when the server self-updates it exits with code 75 and we
+# relaunch automatically.
+while true; do
+  set +e
+  python3 deploy/local/server.py
+  rc=$?
+  set -e
+  if [ "$rc" = "75" ] || [ -f .restart-requested ]; then
+    rm -f .restart-requested
+    echo "==> Update applied — restarting…"
+    sleep 1
+    continue
+  fi
+  exit $rc
+done

@@ -53,6 +53,22 @@ if not exist "remotion\node_modules" (
 )
 
 call .venv\Scripts\activate.bat
+
+REM Restart loop: when the server self-updates it exits with code 75 and we
+REM relaunch automatically.
+:server_loop
 python deploy\local\server.py
+set RC=%errorlevel%
+if exist ".restart-requested" (
+    del ".restart-requested" >nul 2>&1
+    echo ==^> Update applied — restarting…
+    timeout /t 1 /nobreak >nul
+    goto server_loop
+)
+if %RC%==75 (
+    echo ==^> Update applied — restarting…
+    timeout /t 1 /nobreak >nul
+    goto server_loop
+)
 endlocal
-pause
+if not %RC%==0 pause

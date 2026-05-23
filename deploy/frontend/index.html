@@ -14,6 +14,27 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <!-- Update banner — hidden by default, shown when a new release is available -->
+  <div id="update-banner" class="update-banner hidden" role="status">
+    <span class="ub-icon">✨</span>
+    <span class="ub-text">
+      <strong>Nouvelle version dispo</strong>
+      <span id="ub-version"></span>
+    </span>
+    <button class="ub-btn" id="ub-update">Mettre à jour</button>
+    <button class="ub-close" id="ub-close" aria-label="Fermer">✕</button>
+  </div>
+
+  <!-- Update progress overlay (full-screen) -->
+  <div id="update-overlay" class="update-overlay hidden" role="dialog" aria-modal="true">
+    <div class="uo-card">
+      <div class="uo-cat">ᓚᘏᗢ</div>
+      <h3 id="uo-title">Mise à jour en cours…</h3>
+      <div class="progress-bar"><div class="progress-fill" id="uo-fill"></div></div>
+      <p id="uo-msg" class="uo-msg">Préparation…</p>
+    </div>
+  </div>
+
   <!-- Sakura petals raining in the background (CSS-only) -->
   <div class="sakura" aria-hidden="true">
     <span style="--x:5%; --d:8s; --del:0s">🌸</span>

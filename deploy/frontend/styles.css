@@ -623,3 +623,108 @@ footer {
 @media (max-width: 480px) {
   .seed-actions { grid-template-columns: 1fr; }
 }
+
+
+/* === Update banner (top-right corner, dismissible) === */
+.update-banner {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: white;
+  padding: 10px 14px 10px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(255, 126, 182, 0.45);
+  max-width: calc(100vw - 36px);
+  animation: ub-pop 240ms cubic-bezier(0.2, 0.7, 0.2, 1.4);
+}
+@keyframes ub-pop {
+  from { opacity: 0; transform: translateY(-12px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.update-banner .ub-icon {
+  font-size: 18px;
+  animation: sparkle 1.4s ease-in-out infinite;
+}
+.update-banner .ub-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.update-banner .ub-text strong { font-weight: 800; font-size: 13px; }
+.update-banner .ub-text span { opacity: 0.9; font-weight: 500; font-size: 12px; }
+.update-banner .ub-btn {
+  background: white;
+  color: var(--accent);
+  border: none;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-weight: 800;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 120ms;
+}
+.update-banner .ub-btn:hover { transform: scale(1.05); }
+.update-banner .ub-close {
+  background: rgba(255, 255, 255, 0.22);
+  border: none;
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 120ms;
+}
+.update-banner .ub-close:hover { background: rgba(255, 255, 255, 0.35); }
+
+/* === Update overlay (full screen, blocks UI during update) === */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 42, 74, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.update-overlay .uo-card {
+  background: var(--paper);
+  border: 2px solid var(--border);
+  border-radius: 24px;
+  padding: 32px 36px;
+  max-width: 460px;
+  width: calc(100vw - 36px);
+  text-align: center;
+  box-shadow: 0 18px 48px rgba(255, 126, 182, 0.35);
+}
+.update-overlay .uo-cat {
+  font-size: 28px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  animation: bob 2.2s ease-in-out infinite;
+}
+.update-overlay h3 {
+  margin: 0 0 16px;
+  font-family: "Mochiy Pop One", "M PLUS Rounded 1c", sans-serif;
+  color: var(--ink);
+  font-size: 18px;
+}
+.update-overlay .uo-msg {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  min-height: 1.4em;
+}

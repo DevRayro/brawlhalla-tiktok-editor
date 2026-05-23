@@ -35,6 +35,11 @@ jobs:
         shell: pwsh
         run: choco install -y innosetup
 
+      - name: Sync VERSION file
+        shell: pwsh
+        run: |
+          "${{ steps.ver.outputs.version }}" | Out-File -Encoding ASCII -NoNewline VERSION
+
       - name: Patch installer version
         shell: pwsh
         run: |
@@ -70,6 +75,7 @@ jobs:
       - name: Build DMG
         run: |
           chmod +x installers/macos/build-dmg.sh
+          echo -n "${{ steps.ver.outputs.version }}" > VERSION
           VERSION="${{ steps.ver.outputs.version }}" ./installers/macos/build-dmg.sh
 
       - name: Upload artifact
@@ -104,6 +110,7 @@ jobs:
       - name: Build AppImage
         run: |
           chmod +x installers/linux/build-appimage.sh
+          echo -n "${{ steps.ver.outputs.version }}" > VERSION
           VERSION="${{ steps.ver.outputs.version }}" ARCH=x86_64 \
             ./installers/linux/build-appimage.sh
 
