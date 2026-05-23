@@ -170,55 +170,38 @@ html, body {
 .req { color: var(--danger); font-weight: 700; }
 .opt { color: var(--ink-soft); font-weight: 400; font-size: 13px; }
 
-/* Music URL field — alternative to the upload dropzone */
-.music-url-wrap {
+/* Music URL field — discreet bar tucked under the upload dropzone */
+.music-block { display: flex; flex-direction: column; gap: 0; }
+.music-block .dropzone { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; border-bottom-width: 0; }
+.music-url {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 8px;
-  margin-top: 10px;
-}
-.music-url-or {
-  align-self: center;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--ink-soft);
+  padding: 9px 14px;
   background: var(--paper-soft);
-  padding: 2px 12px;
-  border-radius: 999px;
-  border: 1.5px dashed var(--border);
-}
-.music-url-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--paper-soft);
-  border: 2px solid var(--border);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border: 2.5px dashed var(--border);
+  border-top-width: 1.5px;
+  border-top-style: dashed;
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
   transition: border-color 150ms, box-shadow 150ms;
 }
-.music-url-field:focus-within {
+.music-url:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(255, 126, 182, 0.15);
 }
-.music-url-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--ink);
-}
-.music-url-field input {
+.music-url-icon { font-size: 14px; opacity: 0.7; }
+.music-url input {
+  flex: 1;
   background: transparent;
   border: none;
   color: var(--ink);
-  padding: 4px 0;
-  font-size: 14px;
+  font-size: 13px;
   font-family: inherit;
   outline: none;
+  padding: 2px 0;
 }
-.music-url-field input::placeholder { color: var(--ink-soft); opacity: 0.7; }
-.music-url-hint { color: var(--ink-soft); font-size: 12px; }
+.music-url input::placeholder { color: var(--ink-soft); opacity: 0.7; }
 
 /* Form */
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
