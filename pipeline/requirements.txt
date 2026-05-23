@@ -36,3 +36,7 @@ omegaconf==2.3.0
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
 python-multipart==0.0.20
+
+# Audio download (YouTube / SoundCloud / direct URLs). yt-dlp pulls MP3+
+# metadata; ffmpeg (already required) re-encodes to 192k MP3 for clean handoff.
+yt-dlp>=2024.10.0

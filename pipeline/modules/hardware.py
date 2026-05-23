@@ -82,6 +82,54 @@ def _ffmpeg_encoders_blob() -> str:
         return ""
 
 
+def _probe_encoder(encoder: str, hwaccel_decoder: str | None = None) -> bool:
+    """Try to actually USE an encoder on a 1-frame synthetic input. Returns
+    True only if ffmpeg exits 0 and produces a non-empty output.
+
+    This is much more reliable than parsing `ffmpeg -encoders`, because the
+    binary may list encoders the host hardware can't actually run (e.g.
+    h264_nvenc is always present on standard Windows ffmpeg builds, even on
+    AMD/Intel machines where nvcuda.dll can't load).
+    """
+    if not shutil.which("ffmpeg"):
+        return False
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1:d=1",
+        "-frames:v", "1",
+        "-c:v", encoder,
+    ]
+    # Let some encoders specify pix_fmt for compatibility.
+    if encoder in ("h264_qsv",):
+        args += ["-pix_fmt", "nv12"]
+    else:
+        args += ["-pix_fmt", "yuv420p"]
+    args += ["-f", "null", "-"]
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=10)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _probe_hwaccel(hwaccel: str) -> bool:
+    """Test whether `-hwaccel <name>` actually initialises on this machine."""
+    if not shutil.which("ffmpeg"):
+        return False
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-hwaccel", hwaccel,
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1:d=1",
+        "-frames:v", "1",
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=10)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def _ffmpeg_hwaccels_blob() -> str:
     """Return `ffmpeg -hwaccels` stdout for decoder detection."""
     if not shutil.which("ffmpeg"):
@@ -118,48 +166,50 @@ def detect(force: bool = False) -> Hardware:
     encoders = _ffmpeg_encoders_blob()
     hwaccels = _ffmpeg_hwaccels_blob().lower()
 
-    hw.has_nvenc = "h264_nvenc" in encoders
-    hw.has_qsv = "h264_qsv" in encoders
-    hw.has_amf = "h264_amf" in encoders
-    hw.has_videotoolbox = "h264_videotoolbox" in encoders
+    # Listed in the build = "compiled in". Doesn't mean the local hardware
+    # can actually run them. We probe each candidate before trusting it.
+    listed_nvenc = "h264_nvenc" in encoders
+    listed_qsv = "h264_qsv" in encoders
+    listed_amf = "h264_amf" in encoders
+    listed_vt = "h264_videotoolbox" in encoders
 
     hw.has_cuda, hw.has_mps, hw.cuda_name = _detect_torch()
 
-    # Pick the best video encoder available. Order matches the priority list
-    # in the module docstring: NVENC > VideoToolbox > QSV > AMF > libx264.
-    if hw.has_nvenc:
+    # Probe encoders for real availability. Order: NVENC > VideoToolbox > QSV
+    # > AMF > libx264 software fallback.
+    if listed_nvenc and _probe_encoder("h264_nvenc"):
+        hw.has_nvenc = True
         hw.encoder_name = "h264_nvenc"
         hw.encoder_kind = "nvenc"
-    elif hw.has_videotoolbox and hw.os_name == "macos":
+    elif listed_vt and hw.os_name == "macos" and _probe_encoder("h264_videotoolbox"):
+        hw.has_videotoolbox = True
         hw.encoder_name = "h264_videotoolbox"
         hw.encoder_kind = "videotoolbox"
-    elif hw.has_qsv:
+    elif listed_qsv and _probe_encoder("h264_qsv"):
+        hw.has_qsv = True
         hw.encoder_name = "h264_qsv"
         hw.encoder_kind = "qsv"
-    elif hw.has_amf:
+    elif listed_amf and _probe_encoder("h264_amf"):
+        hw.has_amf = True
         hw.encoder_name = "h264_amf"
         hw.encoder_kind = "amf"
     else:
         hw.encoder_name = "libx264"
         hw.encoder_kind = "cpu"
 
-    # Decoder hwaccel: prefer the same family as the encoder if available, but
-    # fall back gracefully. We only emit the args; it's safe to pass them and
-    # let ffmpeg fail back to software if the system doesn't actually support
-    # them at runtime (-hwaccel is best-effort by design).
-    if hw.encoder_kind == "nvenc" and "cuda" in hwaccels:
+    # Decoder hwaccel: same logic — only set it if the runtime probe succeeds.
+    if hw.encoder_kind == "nvenc" and "cuda" in hwaccels and _probe_hwaccel("cuda"):
         hw.decoder_hwaccel = ["-hwaccel", "cuda"]
-    elif hw.encoder_kind == "videotoolbox" and "videotoolbox" in hwaccels:
+    elif hw.encoder_kind == "videotoolbox" and "videotoolbox" in hwaccels and _probe_hwaccel("videotoolbox"):
         hw.decoder_hwaccel = ["-hwaccel", "videotoolbox"]
-    elif hw.encoder_kind == "qsv" and "qsv" in hwaccels:
+    elif hw.encoder_kind == "qsv" and "qsv" in hwaccels and _probe_hwaccel("qsv"):
         hw.decoder_hwaccel = ["-hwaccel", "qsv"]
     elif hw.encoder_kind == "amf":
-        # AMD doesn't expose its own hwaccel name; use platform-typical decoder.
-        if hw.os_name == "windows" and "d3d11va" in hwaccels:
+        # AMD has no `-hwaccel amf`. Try the platform-native decoder accelerator.
+        if hw.os_name == "windows" and "d3d11va" in hwaccels and _probe_hwaccel("d3d11va"):
             hw.decoder_hwaccel = ["-hwaccel", "d3d11va"]
-        elif hw.os_name == "linux" and "vaapi" in hwaccels:
+        elif hw.os_name == "linux" and "vaapi" in hwaccels and _probe_hwaccel("vaapi"):
             hw.decoder_hwaccel = ["-hwaccel", "vaapi"]
-    # else: no hwaccel, software decode.
 
     # Whisper. faster-whisper / ctranslate2 doesn't support MPS, so Apple
     # Silicon falls back to CPU int8 — still fast on M-series CPUs.

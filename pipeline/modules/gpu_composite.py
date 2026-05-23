@@ -249,7 +249,44 @@ def composite(
     print(f"[gpu_composite] $ ffmpeg ... -filter_complex \"{flt[:120]}{'...' if len(flt) > 120 else ''}\"")
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     if proc.returncode != 0:
-        # Surface ffmpeg's stderr in the exception so the user sees what failed.
+        # Detect hardware-related failures (driver missing, nvcuda.dll, AMF
+        # surface mismatch, QSV surface alloc, etc.) and retry once with the
+        # software libx264 + no decode hwaccel. This is the safety net for
+        # users whose ffmpeg binary lists hardware encoders that aren't
+        # actually usable on their machine (typical with the standard Windows
+        # ffmpeg builds on AMD/Intel hardware).
+        err = (proc.stderr or "").lower()
+        hw_markers = (
+            "nvcuda", "cannot load cuda", "could not dynamically load cuda",
+            "no device available", "device creation failed",
+            "h264_amf", "amf encoder", "qsv encoder", "videotoolbox encoder",
+            "operation not permitted",
+        )
+        if any(m in err for m in hw_markers):
+            print(f"[gpu_composite] Hardware path failed; retrying with CPU encoder")
+            print(f"  reason: {proc.stderr.strip().splitlines()[0] if proc.stderr.strip() else 'unknown'}")
+            sw_cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats",
+                "-i", str(video),                       # no -hwaccel
+                "-filter_complex", flt,
+                "-map", f"[{last}]",
+                "-r", str(out_fps),
+                "-an",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                str(out_path),
+            ]
+            proc = subprocess.run(sw_cmd, capture_output=True, text=True, cwd=cwd)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"gpu_composite (software fallback) failed (exit {proc.returncode}):\n"
+                    f"  cmd: {' '.join(sw_cmd)}\n"
+                    f"  stderr:\n{proc.stderr}"
+                )
+            print(f"[gpu_composite] CPU fallback succeeded → {out_path.name}")
+            return out_path
+        # Non-hardware error: surface as before.
         raise RuntimeError(
             f"gpu_composite failed (exit {proc.returncode}):\n"
             f"  cmd: {' '.join(cmd)}\n"
