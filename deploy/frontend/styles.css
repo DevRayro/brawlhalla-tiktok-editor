@@ -170,38 +170,42 @@ html, body {
 .req { color: var(--danger); font-weight: 700; }
 .opt { color: var(--ink-soft); font-weight: 400; font-size: 13px; }
 
-/* Music URL field — discreet bar tucked under the upload dropzone */
-.music-block { display: flex; flex-direction: column; gap: 0; }
-.music-block .dropzone { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; border-bottom-width: 0; }
+/* Music URL bar — lives inside the music dropzone as a sub-element */
 .music-url {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 14px;
-  background: var(--paper-soft);
-  border: 2.5px dashed var(--border);
-  border-top-width: 1.5px;
-  border-top-style: dashed;
-  border-bottom-left-radius: 16px;
-  border-bottom-right-radius: 16px;
-  transition: border-color 150ms, box-shadow 150ms;
+  margin: 12px auto 0;
+  max-width: 360px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  cursor: text;
+  transition: border-color 150ms, box-shadow 150ms, background 150ms;
+}
+.music-url:hover {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: var(--accent-3);
 }
 .music-url:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px rgba(255, 126, 182, 0.15);
+  background: white;
+  box-shadow: 0 0 0 3px rgba(255, 126, 182, 0.18);
 }
-.music-url-icon { font-size: 14px; opacity: 0.7; }
+.music-url-icon { font-size: 13px; opacity: 0.65; }
 .music-url input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12.5px;
   font-family: inherit;
   outline: none;
   padding: 2px 0;
 }
-.music-url input::placeholder { color: var(--ink-soft); opacity: 0.7; }
+.music-url input::placeholder { color: var(--ink-soft); opacity: 0.75; }
 
 /* Form */
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
