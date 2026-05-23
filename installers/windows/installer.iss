@@ -32,7 +32,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Replace with your icon file if you ship one:
-; SetupIconFile=..\..\installers\windows\app.ico
+SetupIconFile=app.ico
 UninstallDisplayName={#AppName}
 
 [Languages]
@@ -40,15 +40,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "french";  MessagesFile: "compiler:Languages\French.isl"
 
 [Files]
+; Ship the dedicated icon so Start menu / Desktop shortcuts use it.
+Source: "app.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Ship every text/code asset, but skip the heavy artefacts that get
 ; populated at first-run (or that don't exist in CI).
 Source: "..\..\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; \
   Excludes: "\.git\*,\.venv\*,_local_jobs\*,output\*,work\*,models\*.pt,models\*.pth,remotion\node_modules\*,remotion\public\*-base.mp4,remotion\public\*-source.mp4,remotion\public\*-audio.m4a,dist\*,installers\dist\*,*.pyc,__pycache__\*"
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Créer un raccourci sur le bureau"; GroupDescription: "Raccourcis :"; Flags: checkedonce

@@ -40,8 +40,8 @@ deploy/_mascot-sources/
 dist/
 remotion/public/*-base.mp4
 
-# Optional precomputed icons (binary, not always present in fresh clone)
-installers/macos/AppIcon.icns
-installers/linux/icon.png
-installers/windows/app.ico
+# Generated icon scratch files (per-size PNGs are intermediate; source.png
+# and the platform-specific outputs ARE committed so CI can ship icons
+# without needing Pillow / iconutil).
+icons/icon-*.png
 _dmg_test/
