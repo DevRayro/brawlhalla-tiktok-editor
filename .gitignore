@@ -9,6 +9,8 @@ __pycache__/
 
 # Local server runtime files
 _local_jobs/
+# Shared source-keyed cache (transcription, tracking, frames)
+_cache/
 
 # Big model checkpoints (downloaded by setup, don't commit)
 models/

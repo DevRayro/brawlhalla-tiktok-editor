@@ -579,7 +579,10 @@ def track(video: Path, video_meta: dict[str, Any], cache_dir: Path,
         if SAM2_CHECKPOINT.exists():
             print("[tracker] Backend: SAM2 (sam2.1_hiera_small)")
             backend = "sam2"
-            pts = _sam2_track(video, seek_frame, bbox, src_w, src_h, n_frames, cache_dir)
+            from . import gpu_guard
+            # Serialize SAM2 against other GPU stages (Whisper, other jobs).
+            with gpu_guard.gpu_section("sam2"):
+                pts = _sam2_track(video, seek_frame, bbox, src_w, src_h, n_frames, cache_dir)
         else:
             raise FileNotFoundError("checkpoint missing")
     except Exception as e:
