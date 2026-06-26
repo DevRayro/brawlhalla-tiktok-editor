@@ -12,6 +12,7 @@ Launch via:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import threading
@@ -41,6 +42,10 @@ JOBS: dict[str, dict] = {}
 JOB_SEEDS: dict[str, dict] = {}
 # threading.Event signalling the pipeline that the seed is ready.
 JOB_SEED_EVENTS: dict[str, threading.Event] = {}
+# Per-job cancel flag (set when the user asks to stop a running/queued job).
+JOB_CANCEL: dict[str, threading.Event] = {}
+# Per-job live subprocess (Remotion render) so cancel can kill it immediately.
+JOB_PROCS: dict[str, "object"] = {}
 LOCAL_JOBS_DIR = ROOT / "_local_jobs"
 LOCAL_JOBS_DIR.mkdir(exist_ok=True)
 
@@ -48,12 +53,210 @@ FRONTEND_DIR = ROOT / "deploy" / "frontend"
 
 PORT = 8765
 
+# Server code version (from the VERSION file). Surfaced to the frontend so a
+# stale browser / stale server mismatch can be detected and flagged.
+try:
+    SERVER_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    SERVER_VERSION = "dev"
+
+# Stages that mean the job has stopped.
+TERMINAL_STAGES = {"done", "error", "cancelled"}
+
+# How many finished jobs to keep before auto-pruning the oldest, and how old
+# (days) a finished job can get before it's removed on startup.
+MAX_KEPT_JOBS = 60
+MAX_JOB_AGE_DAYS = 21
+
+# ---------------------------------------------------------------------------
+# Job scheduler
+#
+# Several clips can be submitted at once. Rather than running every pipeline
+# at the same time (which would thrash CPU/GPU/RAM), we run at most
+# MAX_CONCURRENT pipelines in parallel and keep the rest in a waiting queue.
+# Default is 1 — the pipeline (Whisper + SAM2 + Remotion) already saturates a
+# single machine. Override with EDITOR_MAX_CONCURRENT.
+#
+# The waiting order IS JOB_ORDER: workers pick the first job whose stage is
+# "queued". That makes reordering trivial (just move the id in JOB_ORDER) and
+# lets us persist/restore the whole queue across restarts.
+# ---------------------------------------------------------------------------
+try:
+    MAX_CONCURRENT = max(1, int(os.environ.get("EDITOR_MAX_CONCURRENT", "1")))
+except ValueError:
+    MAX_CONCURRENT = 1
+
+# Creation/run order of all jobs; also the scheduling order.
+JOB_ORDER: list[str] = []
+# Condition guarding JOB_ORDER + claim transitions, and waking idle workers.
+SCHED_COND = threading.Condition()
+# Guard so the worker pool is only spawned once.
+_WORKERS_STARTED = threading.Event()
+# Throttle persistence writes per job.
+_LAST_PERSIST: dict[str, float] = {}
+
+
+class JobCancelled(Exception):
+    """Raised inside run_pipeline when the user cancels a running job."""
+
+
+def _persist_job(job_id: str, force: bool = False) -> None:
+    """Write the job's current status to its dir so it survives restarts.
+
+    Throttled to at most once per 2s per job unless `force` (terminal states,
+    stage changes) bypasses the throttle.
+    """
+    st = JOBS.get(job_id)
+    if st is None:
+        return
+    now = time.time()
+    if not force and (now - _LAST_PERSIST.get(job_id, 0.0)) < 2.0:
+        return
+    _LAST_PERSIST[job_id] = now
+    job_dir = LOCAL_JOBS_DIR / job_id
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "job.json").write_text(
+            json.dumps(st, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _restore_jobs() -> None:
+    """Rebuild the job list from disk on startup. Jobs that were mid-run when
+    the server stopped are re-queued (the shared cache makes re-runs cheap)."""
+    entries = []
+    for d in LOCAL_JOBS_DIR.iterdir():
+        jf = d / "job.json"
+        if not d.is_dir() or not jf.exists():
+            continue
+        try:
+            st = json.loads(jf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries.append((st.get("created_at", 0.0), d.name, st))
+    entries.sort(key=lambda e: e[0])
+
+    for _created, jid, st in entries:
+        stage = st.get("stage")
+        if stage not in TERMINAL_STAGES and stage is not None:
+            # Interrupted mid-run → put it back in the queue.
+            st["stage"] = "queued"
+            st["progress"] = 0
+            st["message"] = "Repris après redémarrage…"
+            st.pop("await_seed", None)
+        JOBS[jid] = st
+        JOB_ORDER.append(jid)
+        JOB_CANCEL[jid] = threading.Event()
+    if JOB_ORDER:
+        print(f"  Jobs restaurés depuis le disque : {len(JOB_ORDER)}")
+
+
+def _prune_old_jobs() -> None:
+    """Drop very old or excess finished jobs (files + registry) on startup."""
+    cutoff = time.time() - MAX_JOB_AGE_DAYS * 86400
+    finished = [(JOBS[j].get("created_at", 0.0), j) for j in JOB_ORDER
+                if JOBS.get(j, {}).get("stage") in TERMINAL_STAGES]
+    finished.sort()
+    to_remove: list[str] = [j for c, j in finished if c < cutoff]
+    # Keep only the most recent MAX_KEPT_JOBS finished jobs.
+    excess = len(finished) - len(to_remove) - MAX_KEPT_JOBS
+    if excess > 0:
+        for _c, j in finished:
+            if j in to_remove:
+                continue
+            to_remove.append(j)
+            excess -= 1
+            if excess <= 0:
+                break
+    for jid in to_remove:
+        _delete_job_files(jid)
+        JOBS.pop(jid, None)
+        if jid in JOB_ORDER:
+            JOB_ORDER.remove(jid)
+    if to_remove:
+        print(f"  Jobs anciens nettoyés : {len(to_remove)}")
+
+
+def _delete_job_files(job_id: str) -> None:
+    shutil.rmtree(LOCAL_JOBS_DIR / job_id, ignore_errors=True)
+
+
+def _prune_job_workdir(job_id: str) -> None:
+    """After a successful render, drop the heavy intermediate work dir but keep
+    the finished output and the original input."""
+    work = LOCAL_JOBS_DIR / job_id / "work"
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def _claim_next_job() -> str:
+    """Block until a queued job is available, mark it 'starting', return it."""
+    with SCHED_COND:
+        while True:
+            for jid in JOB_ORDER:
+                st = JOBS.get(jid)
+                if st and st.get("stage") == "queued":
+                    st["stage"] = "starting"
+                    st["progress"] = 1
+                    st["message"] = "Démarrage…"
+                    st["updated_at"] = time.time()
+                    _persist_job(jid, force=True)
+                    return jid
+            SCHED_COND.wait()
+
+
+def _enqueue(job_id: str) -> None:
+    """Add a job to the schedule and wake an idle worker."""
+    with SCHED_COND:
+        if job_id not in JOB_ORDER:
+            JOB_ORDER.append(job_id)
+        SCHED_COND.notify_all()
+
+
+def _worker_loop() -> None:
+    """Claim and run queued jobs one at a time (per worker)."""
+    while True:
+        job_id = _claim_next_job()
+        cancel = JOB_CANCEL.get(job_id)
+        if cancel and cancel.is_set():
+            _set_status(job_id, stage="cancelled", progress=0, message="Annulé.")
+            continue
+        try:
+            run_pipeline(job_id)
+        except JobCancelled:
+            _set_status(job_id, stage="cancelled", message="Annulé.")
+        except Exception:
+            traceback.print_exc()
+        finally:
+            JOB_PROCS.pop(job_id, None)
+
+
+def _ensure_workers() -> None:
+    """Spawn the worker pool exactly once."""
+    if _WORKERS_STARTED.is_set():
+        return
+    _WORKERS_STARTED.set()
+    for i in range(MAX_CONCURRENT):
+        t = threading.Thread(target=_worker_loop, name=f"job-worker-{i}",
+                             daemon=True)
+        t.start()
+
+
+def _check_cancel(job_id: str) -> None:
+    """Raise JobCancelled if the user asked to stop this job."""
+    ev = JOB_CANCEL.get(job_id)
+    if ev is not None and ev.is_set():
+        raise JobCancelled()
+
 
 def _set_status(job_id: str, **fields) -> None:
     cur = JOBS.get(job_id) or {}
+    prev_stage = cur.get("stage")
     cur.update(fields)
     cur["updated_at"] = time.time()
     JOBS[job_id] = cur
+    new_stage = cur.get("stage")
+    _persist_job(job_id, force=(new_stage != prev_stage))
 
 
 def run_pipeline(job_id: str) -> None:
@@ -76,6 +279,14 @@ def run_pipeline(job_id: str) -> None:
     config.WORK_DIR = work_dir
     config.REMOTION_DIR = ROOT / "remotion"
 
+    # Shared cache for source-only work (transcription, tracking, frames):
+    # the same video re-uploaded in another job reuses these instead of
+    # recomputing. Job-specific stuff (audio mix, composite, render) stays
+    # in work_dir.
+    cache_dir = ROOT / "_cache"
+    cache_dir.mkdir(exist_ok=True, parents=True)
+    config.CACHE_DIR = cache_dir
+
     # Track per-stage timing so the UI can show what took how long.
     started_at = time.time()
     stage_times: dict[str, float] = {}
@@ -93,6 +304,8 @@ def run_pipeline(job_id: str) -> None:
 
     # Wrap _set_status so any stage transition records timing automatically.
     def _stage(job_id: str, **fields) -> None:
+        # Every stage boundary is a cancellation checkpoint.
+        _check_cancel(job_id)
         new_stage = fields.get("stage")
         if new_stage and new_stage != _current_stage[0]:
             _mark_stage(new_stage)
@@ -118,7 +331,7 @@ def run_pipeline(job_id: str) -> None:
         extra_terms = notes.get("extra_terms") or []
         if isinstance(extra_terms, str):
             extra_terms = [t.strip() for t in extra_terms.split(",") if t.strip()]
-        transcript = transcribe.transcribe(inputs.video, work_dir, extra_terms=extra_terms)
+        transcript = transcribe.transcribe(inputs.video, cache_dir, extra_terms=extra_terms)
         sub_groups = transcribe.group_words(
             transcript["words"],
             group_size=config.SUB_GROUP_SIZE,
@@ -155,6 +368,7 @@ def run_pipeline(job_id: str) -> None:
             got_seed = event.wait(timeout=300)  # 5 minutes max
             user_seed = JOB_SEEDS.get(job_id)
             _set_status(job_id, await_seed=False)
+            _check_cancel(job_id)
 
             from pipeline.modules import hardware as _hw_mod
             _hw_track = _hw_mod.detect()
@@ -169,20 +383,22 @@ def run_pipeline(job_id: str) -> None:
                     bw = int(user_seed["w"])
                     bh = int(user_seed["h"])
                     track_data = sam2_tracker.track(
-                        inputs.video, meta, work_dir,
+                        inputs.video, meta, cache_dir,
                         seed=(sf, (bx, by, bw, bh)),
                     )
                 else:
                     # User never submitted a seed → fall back to auto-seed.
                     track_data = sam2_tracker.track(
-                        inputs.video, meta, work_dir, auto_seed=True,
+                        inputs.video, meta, cache_dir, auto_seed=True,
                     )
+            except JobCancelled:
+                raise
             except Exception as e:
                 print(f"[track] SAM2 failed ({e}); falling back to action_tracker.",
                       file=sys.stderr, flush=True)
                 _stage(job_id, stage="track", progress=43,
                             message=f"SAM2 KO ({type(e).__name__}) — fallback action_tracker…")
-                track_data = action_tracker.track(inputs.video, meta, work_dir)
+                track_data = action_tracker.track(inputs.video, meta, cache_dir)
             _stage(job_id, stage="camera", progress=55,
                         message="Calcul du plan caméra…")
 
@@ -312,6 +528,8 @@ def run_pipeline(job_id: str) -> None:
             bufsize=0,
             shell=is_windows,
         )
+        # Register the live process so a cancel request can kill it instantly.
+        JOB_PROCS[job_id] = proc
 
         rendering_re = re.compile(rb"Render(?:ing|ed)?\s*(?:frames\s+)?.*?(\d+)\s*/\s*(\d+)")
         encoding_re = re.compile(rb"Encod(?:ing|ed)?\s*(?:video\s+)?.*?(\d+)\s*/\s*(\d+)")
@@ -320,6 +538,14 @@ def run_pipeline(job_id: str) -> None:
         buf = b""
         assert proc.stdout is not None
         while True:
+            # Cancellation: kill the render subprocess immediately.
+            ev = JOB_CANCEL.get(job_id)
+            if ev is not None and ev.is_set():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                raise JobCancelled()
             chunk = proc.stdout.read(256)
             if not chunk:
                 break
@@ -355,6 +581,8 @@ def run_pipeline(job_id: str) -> None:
                     print(f"[remotion] {line}", flush=True)
 
         rc = proc.wait()
+        JOB_PROCS.pop(job_id, None)
+        _check_cancel(job_id)
         if rc != 0:
             raise RuntimeError(f"Remotion render failed (exit {rc})")
 
@@ -374,7 +602,14 @@ def run_pipeline(job_id: str) -> None:
                     elapsed=total_elapsed,
                     total_elapsed=total_elapsed,
                     stage_times=dict(stage_times))
+        # Reclaim disk: the heavy work dir (composited base, frames) is no
+        # longer needed once the final mp4 is in the output dir.
+        _prune_job_workdir(job_id)
 
+    except JobCancelled:
+        # Bubble up so the worker marks the job cancelled (not errored).
+        JOB_PROCS.pop(job_id, None)
+        raise
     except Exception as e:
         tb = traceback.format_exc()
         _mark_stage("error")
@@ -400,7 +635,11 @@ app.add_middleware(
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    # Cache-busting: replace the version placeholder so the browser always
+    # refetches app.js / styles.css after an update, and the JS knows which
+    # server version it's paired with.
+    return html.replace("__VERSION__", SERVER_VERSION)
 
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
@@ -468,8 +707,12 @@ async def upload(
     )
     (in_dir / "notes.md").write_text(frontmatter, encoding="utf-8")
 
-    _set_status(job_id, stage="queued", progress=0, message="En file d'attente…")
-    threading.Thread(target=run_pipeline, args=(job_id,), daemon=True).start()
+    _set_status(job_id, stage="queued", progress=0, message="En file d'attente…",
+                created_at=time.time(), title=title or "",
+                source_name=video.filename or "")
+    JOB_CANCEL[job_id] = threading.Event()
+    _ensure_workers()
+    _enqueue(job_id)
     return {"job_id": job_id}
 
 
@@ -479,6 +722,139 @@ async def status(job_id: str):
     if st is None:
         raise HTTPException(404, "unknown job")
     return JSONResponse(st)
+
+
+# A compact subset of fields is enough for the list view; the per-job status
+# endpoint still returns everything for the detail/seed views.
+_LIST_FIELDS = (
+    "stage", "progress", "message", "title", "source_name", "created_at",
+    "updated_at", "elapsed", "total_elapsed", "await_seed",
+)
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    """All known jobs, in schedule order, with queue positions for the ones
+    still waiting to start. Drives the job-list UI."""
+    with SCHED_COND:
+        order = list(JOB_ORDER)
+    queued = [jid for jid in order
+              if (JOBS.get(jid) or {}).get("stage") == "queued"]
+    pos = {jid: i + 1 for i, jid in enumerate(queued)}
+
+    items = []
+    for jid in order:
+        st = JOBS.get(jid)
+        if not st:
+            continue
+        item = {"job_id": jid}
+        for k in _LIST_FIELDS:
+            if k in st:
+                item[k] = st[k]
+        if jid in pos:
+            item["queue_position"] = pos[jid]
+            item["queue_total"] = len(queued)
+        items.append(item)
+    return JSONResponse({
+        "jobs": items,
+        "max_concurrent": MAX_CONCURRENT,
+        "server_version": SERVER_VERSION,
+        "queued": len(queued),
+        "running": sum(1 for jid in order
+                       if (JOBS.get(jid) or {}).get("stage")
+                       not in TERMINAL_STAGES | {"queued", None}),
+    })
+
+
+@app.post("/api/cancel/{job_id}")
+async def cancel_job(job_id: str):
+    """Cancel a job — queued OR running. Running jobs stop at the next stage
+    boundary; the Remotion render subprocess (the long one) is killed at once."""
+    st = JOBS.get(job_id)
+    if st is None:
+        raise HTTPException(404, "unknown job")
+    stage = st.get("stage")
+    if stage in TERMINAL_STAGES:
+        raise HTTPException(409, "job already finished")
+
+    ev = JOB_CANCEL.setdefault(job_id, threading.Event())
+    ev.set()
+    # If it's parked waiting for a seed, unblock that wait so cancel takes hold.
+    JOB_SEED_EVENTS.setdefault(job_id, threading.Event()).set()
+    # Kill any live render subprocess immediately.
+    proc = JOB_PROCS.get(job_id)
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    if stage == "queued":
+        # Never started → mark cancelled right away.
+        _set_status(job_id, stage="cancelled", progress=0, message="Annulé.")
+    else:
+        _set_status(job_id, message="Annulation en cours…")
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/move")
+async def move_job(job_id: str, body: dict):
+    """Reorder a *queued* job in the waiting line. body={"direction": up|down|top}."""
+    direction = (body or {}).get("direction", "up")
+    st = JOBS.get(job_id)
+    if st is None:
+        raise HTTPException(404, "unknown job")
+    if st.get("stage") != "queued":
+        raise HTTPException(409, "only queued jobs can be reordered")
+
+    with SCHED_COND:
+        queued = [j for j in JOB_ORDER
+                  if (JOBS.get(j) or {}).get("stage") == "queued"]
+        if job_id not in queued:
+            raise HTTPException(409, "job not queued")
+        qi = queued.index(job_id)
+        if direction == "top":
+            target = queued[0]
+        elif direction == "up":
+            target = queued[max(0, qi - 1)]
+        elif direction == "down":
+            target = queued[min(len(queued) - 1, qi + 1)]
+        else:
+            raise HTTPException(400, "bad direction")
+        if target != job_id:
+            # Move job_id to just before `target`'s slot in JOB_ORDER.
+            JOB_ORDER.remove(job_id)
+            ti = JOB_ORDER.index(target)
+            if direction == "down":
+                ti += 1
+            JOB_ORDER.insert(ti, job_id)
+        SCHED_COND.notify_all()
+    return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_id}")
+async def remove_job(job_id: str):
+    """Remove a finished/errored/cancelled job from the list and delete its
+    files. Queued jobs are cancelled first. Running jobs are refused."""
+    st = JOBS.get(job_id)
+    if st is None:
+        raise HTTPException(404, "unknown job")
+    stage = st.get("stage")
+    if stage == "queued":
+        JOB_CANCEL.setdefault(job_id, threading.Event()).set()
+    elif stage not in TERMINAL_STAGES:
+        raise HTTPException(409, "job is running; cancel it first")
+
+    with SCHED_COND:
+        if job_id in JOB_ORDER:
+            JOB_ORDER.remove(job_id)
+    JOBS.pop(job_id, None)
+    JOB_SEEDS.pop(job_id, None)
+    JOB_SEED_EVENTS.pop(job_id, None)
+    JOB_CANCEL.pop(job_id, None)
+    _LAST_PERSIST.pop(job_id, None)
+    shutil.rmtree(LOCAL_JOBS_DIR / job_id, ignore_errors=True)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -889,7 +1265,14 @@ def main() -> None:
     print("  ║   Ctrl+C to stop                                  ║")
     print("  ╚═══════════════════════════════════════════════════╝")
     print(f"  Hardware: {hw_line}")
+    print(f"  Concurrence: {MAX_CONCURRENT} job(s) en parallèle "
+          f"(EDITOR_MAX_CONCURRENT pour changer)")
+    print(f"  Version: {SERVER_VERSION}")
+    # Restore the queue from disk and prune stale jobs before accepting work.
+    _restore_jobs()
+    _prune_old_jobs()
     print()
+    _ensure_workers()
     threading.Thread(target=_open_browser_when_ready, daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 

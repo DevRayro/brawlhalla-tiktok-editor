@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,32 @@ from .. import config
 
 
 LEXICON_DIR = Path(__file__).resolve().parent.parent / "lexicon"
+
+# --- Whisper model singleton -------------------------------------------------
+# Loading large-v3 costs ~3 GB of VRAM and 10-30s. We keep one instance per
+# (model, device, compute_type) alive for the whole server process and reuse
+# it across jobs instead of reloading per clip. A lock serializes inference
+# because a single faster-whisper model isn't safe to call from two threads
+# at once.
+_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+_MODEL_USE_LOCK = threading.Lock()
+
+
+def _get_model(model_name: str, device: str, compute_type: str):
+    """Return a cached WhisperModel, loading it once on first use."""
+    cache_key_t = (model_name, device, compute_type)
+    with _MODEL_CACHE_LOCK:
+        model = _MODEL_CACHE.get(cache_key_t)
+        if model is None:
+            from faster_whisper import WhisperModel
+            print(f"[transcribe] Loading model {model_name} on {device} "
+                  f"({compute_type})… [once, cached for reuse]")
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            _MODEL_CACHE[cache_key_t] = model
+        else:
+            print(f"[transcribe] Reusing already-loaded {model_name} ({device}).")
+    return model
 
 
 def _audio_for_whisper(video: Path, dst: Path) -> None:
@@ -117,8 +144,8 @@ def transcribe(video: Path, cache_dir: Path, extra_terms: list[str] | None = Non
         _audio_for_whisper(video, wav_path)
 
     # Lazy import so the rest of the pipeline can be inspected without torch.
-    from faster_whisper import WhisperModel
     from . import hardware
+    from . import gpu_guard
 
     hw = hardware.detect()
     device = hw.whisper_device
@@ -132,46 +159,48 @@ def transcribe(video: Path, cache_dir: Path, extra_terms: list[str] | None = Non
     else:
         print(f"[transcribe] No CUDA → device={device} compute_type={compute_type}")
 
-    print(f"[transcribe] Loading model {config.WHISPER_MODEL} on {device} ({compute_type})...")
-    model = WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute_type)
+    model = _get_model(config.WHISPER_MODEL, device, compute_type)
 
     initial_prompt = _load_lexicon(extra_terms)
     if initial_prompt:
         print(f"[transcribe] Using lexicon prompt ({len(initial_prompt)} chars)")
 
     print("[transcribe] Transcribing (word timestamps)...")
-    segments, info = model.transcribe(
-        str(wav_path),
-        language=config.WHISPER_LANG,
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 300},
-        beam_size=5,
-        initial_prompt=initial_prompt or None,
-    )
+    # GPU section + single-use lock: only one transcription touches the shared
+    # model / GPU at a time, even with several jobs running in parallel.
+    with gpu_guard.gpu_section("whisper"), _MODEL_USE_LOCK:
+        segments, info = model.transcribe(
+            str(wav_path),
+            language=config.WHISPER_LANG,
+            word_timestamps=True,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 300},
+            beam_size=5,
+            initial_prompt=initial_prompt or None,
+        )
 
-    replacements = _load_replacements()
-    n_replaced = 0
+        replacements = _load_replacements()
+        n_replaced = 0
 
-    words: list[dict[str, Any]] = []
-    for seg in segments:
-        if not seg.words:
-            continue
-        for w in seg.words:
-            txt = (w.word or "").strip()
-            if not txt:
+        words: list[dict[str, Any]] = []
+        for seg in segments:
+            if not seg.words:
                 continue
-            if replacements:
-                new_txt = _apply_replacements(txt, replacements)
-                if new_txt != txt:
-                    n_replaced += 1
-                    txt = new_txt
-            words.append({
-                "text": txt,
-                "start": float(w.start),
-                "end": float(w.end),
-                "prob": float(getattr(w, "probability", 0.0) or 0.0),
-            })
+            for w in seg.words:
+                txt = (w.word or "").strip()
+                if not txt:
+                    continue
+                if replacements:
+                    new_txt = _apply_replacements(txt, replacements)
+                    if new_txt != txt:
+                        n_replaced += 1
+                        txt = new_txt
+                words.append({
+                    "text": txt,
+                    "start": float(w.start),
+                    "end": float(w.end),
+                    "prob": float(getattr(w, "probability", 0.0) or 0.0),
+                })
 
     result = {"language": info.language, "words": words}
     io_utils.write_json(cache_path, result)

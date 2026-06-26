@@ -1,4 +1,10 @@
 // Brawlhalla TikTok Editor — frontend logic.
+//
+// Multi-job version: the upload form stays available so you can queue several
+// clips at once. The server runs at most N pipelines in parallel (default 1)
+// and keeps the rest in a waiting queue so the machine doesn't get thrashed.
+// This file polls /api/jobs and renders every job as a card with its own
+// progress bar, queue position and actions.
 
 const els = {
   videoDrop: document.getElementById("video-drop"),
@@ -12,25 +18,16 @@ const els = {
 
   framing: document.getElementById("framing"),
   notes: document.getElementById("notes"),
+  title: document.getElementById("title"),
   submit: document.getElementById("submit-btn"),
 
-  stepUpload: document.getElementById("step-upload"),
-  stepProgress: document.getElementById("step-progress"),
-  stepSeed: document.getElementById("step-seed"),
-  stepDone: document.getElementById("step-done"),
-  stepError: document.getElementById("step-error"),
+  jobsSection: document.getElementById("jobs-section"),
+  jobsList: document.getElementById("jobs-list"),
+  jobsMeta: document.getElementById("jobs-meta"),
 
-  progressFill: document.getElementById("progress-fill"),
-  progressText: document.getElementById("progress-text"),
-  progressStage: document.getElementById("progress-stage"),
-  progressElapsed: document.getElementById("progress-elapsed"),
-
-  resultVideo: document.getElementById("result-video"),
-  downloadLink: document.getElementById("download-link"),
-  restartBtn: document.getElementById("restart-btn"),
-  timingSummary: document.getElementById("timing-summary"),
-
-  // Seed picker (tight mode).
+  // Seed picker (tight mode) — lives in a modal now.
+  seedModal: document.getElementById("seed-modal"),
+  seedModalClose: document.getElementById("seed-modal-close"),
   seedImg: document.getElementById("seed-img"),
   seedCanvas: document.getElementById("seed-canvas"),
   seedCanvasWrap: document.getElementById("seed-canvas-wrap"),
@@ -39,22 +36,16 @@ const els = {
   seedClear: document.getElementById("seed-clear"),
   seedSubmit: document.getElementById("seed-submit"),
 
-  errorText: document.getElementById("error-text"),
-  errorRetry: document.getElementById("error-retry"),
-
   mascot: document.getElementById("mascot-img"),
 };
 
 // Random mascot on every load.
 const MASCOT_COUNT = 7;
-const idx = 1 + Math.floor(Math.random() * MASCOT_COUNT);
-els.mascot.src = `/static/mascots/mascot-${String(idx).padStart(2, "0")}.png`;
+const mascotIdx = 1 + Math.floor(Math.random() * MASCOT_COUNT);
+els.mascot.src = `/static/mascots/mascot-${String(mascotIdx).padStart(2, "0")}.png`;
 
-let videoFile = null;
-let musicFile = null;
-let pollTimer = null;
-
-const ACTIVE_JOB_KEY = "brawlhalla:active-job";
+let videoFiles = [];
+let musicFiles = [];
 
 function fmtBytes(n) {
   if (!n) return "";
@@ -64,10 +55,7 @@ function fmtBytes(n) {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
-/**
- * Format a duration in seconds as "1m 23s" or "12.4s".
- * Compact for live counters, readable for the final summary.
- */
+/** Format a duration in seconds as "1m 23s" or "12.4s". */
 function fmtDuration(s) {
   if (s == null || !isFinite(s)) return "—";
   if (s < 60) return `${s.toFixed(1)}s`;
@@ -79,6 +67,7 @@ function fmtDuration(s) {
 /** Friendly French label for each pipeline stage. */
 const STAGE_LABELS = {
   queued: "File d'attente",
+  starting: "Démarrage",
   discover: "Lecture des fichiers",
   audio_url: "Téléchargement musique",
   transcribe: "Transcription (Whisper)",
@@ -91,18 +80,31 @@ const STAGE_LABELS = {
   mux: "Remux MP4",
   done: "Terminé",
   error: "Erreur",
+  cancelled: "Annulé",
 };
 
-function setupDropzone(zone, input, onFile) {
-  const handle = (file) => {
-    onFile(file);
+// Stages that mean the job has stopped (no more progress to expect).
+const TERMINAL_STAGES = new Set(["done", "error", "cancelled"]);
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// ---------------------------------------------------------------------------
+// Upload form
+// ---------------------------------------------------------------------------
+
+function setupDropzone(zone, input, onFiles) {
+  const handle = (files) => {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+    onFiles(list);
     zone.classList.add("has-file");
   };
   zone.addEventListener("click", () => input.click());
-  input.addEventListener("change", (e) => {
-    const f = e.target.files[0];
-    if (f) handle(f);
-  });
+  input.addEventListener("change", (e) => handle(e.target.files));
   zone.addEventListener("dragover", (e) => {
     e.preventDefault();
     zone.classList.add("dragover");
@@ -111,180 +113,46 @@ function setupDropzone(zone, input, onFile) {
   zone.addEventListener("drop", (e) => {
     e.preventDefault();
     zone.classList.remove("dragover");
-    const f = e.dataTransfer.files[0];
-    if (f) handle(f);
+    handle(e.dataTransfer.files);
   });
 }
 
-setupDropzone(els.videoDrop, els.videoInput, (f) => {
-  videoFile = f;
-  els.videoName.textContent = `${f.name} · ${fmtBytes(f.size)}`;
+setupDropzone(els.videoDrop, els.videoInput, (files) => {
+  // Keep only video files; drop anything else silently.
+  videoFiles = files.filter((f) => f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|avi)$/i.test(f.name));
+  if (!videoFiles.length) return;
+  if (videoFiles.length === 1) {
+    els.videoName.textContent = `${videoFiles[0].name} · ${fmtBytes(videoFiles[0].size)}`;
+  } else {
+    const total = videoFiles.reduce((s, f) => s + f.size, 0);
+    els.videoName.textContent = `${videoFiles.length} vidéos · ${fmtBytes(total)}`;
+  }
   els.submit.disabled = false;
 });
-setupDropzone(els.musicDrop, els.musicInput, (f) => {
-  musicFile = f;
-  els.musicName.textContent = `${f.name} · ${fmtBytes(f.size)}`;
-  // Uploading a file overrides any URL the user typed before.
+setupDropzone(els.musicDrop, els.musicInput, (files) => {
+  musicFiles = files.filter((f) => f.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+  if (!musicFiles.length) return;
+  if (musicFiles.length === 1) {
+    els.musicName.textContent = `${musicFiles[0].name} · ${fmtBytes(musicFiles[0].size)}`;
+  } else {
+    const total = musicFiles.reduce((s, f) => s + f.size, 0);
+    els.musicName.textContent = `${musicFiles.length} sons · tirage aléatoire · ${fmtBytes(total)}`;
+  }
   if (els.musicUrlInput) els.musicUrlInput.value = "";
 });
 
-// Typing a URL clears any uploaded file (the two are mutually exclusive).
 els.musicUrlInput?.addEventListener("input", () => {
   if (els.musicUrlInput.value.trim()) {
-    musicFile = null;
+    musicFiles = [];
     els.musicInput.value = "";
     els.musicName.textContent = "";
     els.musicDrop.classList.remove("has-file");
   }
 });
 
-els.submit.addEventListener("click", async () => {
-  if (!videoFile) return;
-  const fd = new FormData();
-  fd.append("video", videoFile);
-  if (musicFile) {
-    fd.append("music", musicFile);
-  } else if (els.musicUrlInput && els.musicUrlInput.value.trim()) {
-    fd.append("music_url", els.musicUrlInput.value.trim());
-  }
-  fd.append("framing", els.framing.value);
-  fd.append("notes", els.notes.value || "");
-
-  goTo("progress");
-  const usingUrl = !musicFile && els.musicUrlInput && els.musicUrlInput.value.trim();
-  setProgress(2, usingUrl ? "Téléchargement de la musique…" : "Téléversement…");
-
-  try {
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!res.ok) {
-      // Try to surface the server's error message (HTTP 400 from yt-dlp etc.).
-      let detail = "";
-      try { detail = (await res.json()).detail || ""; } catch {}
-      throw new Error(detail || `Upload échoué (${res.status})`);
-    }
-    const { job_id } = await res.json();
-    localStorage.setItem(ACTIVE_JOB_KEY, job_id);
-    pollStatus(job_id);
-  } catch (err) {
-    showError(err.message || String(err));
-  }
-});
-
-function pollStatus(jobId) {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    try {
-      const res = await fetch(`/api/status/${jobId}`);
-      if (!res.ok) return;
-      const st = await res.json();
-      const pct = Math.max(0, Math.min(100, Number(st.progress) || 0));
-      setProgress(pct, st.message || "…");
-      els.progressStage.textContent = st.stage ? `Étape: ${STAGE_LABELS[st.stage] || st.stage}` : "";
-      if (typeof st.elapsed === "number") {
-        els.progressElapsed.textContent = `Temps écoulé: ${fmtDuration(st.elapsed)}`;
-      }
-      if (st.await_seed) {
-        // Pipeline is paused waiting for the user to draw a bbox. Switch
-        // to the picker UI; pollStatus stays alive so we can flip back to
-        // progress as soon as the seed is accepted.
-        if (currentStep !== "seed") {
-          openSeedPicker(jobId, st);
-        }
-      } else if (currentStep === "seed") {
-        // Seed accepted — back to progress display.
-        goTo("progress");
-      }
-      if (st.stage === "done") {
-        clearInterval(pollTimer); pollTimer = null;
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-        showDone(jobId, st);
-      } else if (st.stage === "error") {
-        clearInterval(pollTimer); pollTimer = null;
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-        showError(st.message || "Erreur inconnue");
-      }
-    } catch (e) {
-      // network blip — keep polling
-    }
-  }, 2000);
-}
-
-function setProgress(pct, msg) {
-  els.progressFill.style.width = `${pct}%`;
-  els.progressText.textContent = `${pct}% · ${msg}`;
-}
-
-function showDone(jobId, status) {
-  const url = `/api/download/${jobId}`;
-  els.resultVideo.src = url;
-  els.downloadLink.href = url;
-  renderTimingSummary(status);
-  goTo("done");
-}
-
-/** Render the per-stage breakdown card on the "done" screen. */
-function renderTimingSummary(status) {
-  const total = (status && (status.total_elapsed ?? status.elapsed)) || 0;
-  const stageTimes = (status && status.stage_times) || {};
-
-  // Order stages in the order they typically run; skip stages that took 0.
-  const order = ["discover", "transcribe", "track", "camera", "audio", "composite", "render", "mux"];
-  const rows = [];
-  for (const k of order) {
-    const v = stageTimes[k];
-    if (typeof v === "number" && v > 0.05) {
-      rows.push({ stage: k, secs: v });
-    }
-  }
-  // Anything else (custom keys), append.
-  for (const [k, v] of Object.entries(stageTimes)) {
-    if (!order.includes(k) && typeof v === "number" && v > 0.05) {
-      rows.push({ stage: k, secs: v });
-    }
-  }
-
-  // Build the DOM.
-  const safeTotal = total > 0 ? total : 1;
-  const rowsHtml = rows.map(r => {
-    const pct = Math.max(2, Math.min(100, (r.secs / safeTotal) * 100));
-    const label = STAGE_LABELS[r.stage] || r.stage;
-    return `
-      <div class="timing-row">
-        <div class="timing-label">${label}</div>
-        <div class="timing-track"><div class="timing-fill" style="width:${pct.toFixed(1)}%"></div></div>
-        <div class="timing-val">${fmtDuration(r.secs)}</div>
-      </div>
-    `;
-  }).join("");
-
-  els.timingSummary.innerHTML = `
-    <div class="timing-total">
-      <span class="timing-total-label">Temps total</span>
-      <span class="timing-total-val">${fmtDuration(total)}</span>
-    </div>
-    <div class="timing-rows">${rowsHtml}</div>
-  `;
-}
-
-function showError(msg) {
-  els.errorText.textContent = msg;
-  goTo("error");
-}
-
-let currentStep = "upload";
-
-function goTo(step) {
-  currentStep = step;
-  for (const s of ["upload", "progress", "seed", "done", "error"]) {
-    const el = els[`step${s.charAt(0).toUpperCase()}${s.slice(1)}`];
-    if (s === step) el.classList.remove("hidden");
-    else el.classList.add("hidden");
-  }
-}
-
-els.restartBtn.addEventListener("click", () => {
-  videoFile = null;
-  musicFile = null;
+function resetForm() {
+  videoFiles = [];
+  musicFiles = [];
   els.videoInput.value = "";
   els.musicInput.value = "";
   els.videoName.textContent = "";
@@ -292,142 +160,387 @@ els.restartBtn.addEventListener("click", () => {
   els.videoDrop.classList.remove("has-file");
   els.musicDrop.classList.remove("has-file");
   if (els.musicUrlInput) els.musicUrlInput.value = "";
-  els.notes.value = "";
+  if (els.title) els.title.value = "";
+  if (els.notes) els.notes.value = "";
   els.submit.disabled = true;
-  goTo("upload");
+}
+
+els.submit.addEventListener("click", async () => {
+  if (!videoFiles.length) return;
+
+  const musicUrl = (els.musicUrlInput && els.musicUrlInput.value.trim()) || "";
+  const userTitle = (els.title && els.title.value.trim()) || "";
+  const framing = els.framing.value;
+  const notes = (els.notes && els.notes.value) || "";
+  const multi = videoFiles.length > 1;
+
+  els.submit.disabled = true;
+  const original = els.submit.innerHTML;
+
+  let failures = 0;
+  for (let i = 0; i < videoFiles.length; i++) {
+    const video = videoFiles[i];
+    els.submit.innerHTML = `<span>Envoi ${i + 1}/${videoFiles.length}…</span>`;
+
+    const fd = new FormData();
+    fd.append("video", video);
+    // Music: a pool of sounds → pick one at random per video. A single
+    // sound is just always picked. A URL (if no files) applies to all.
+    if (musicFiles.length) {
+      const pick = musicFiles[Math.floor(Math.random() * musicFiles.length)];
+      fd.append("music", pick);
+    } else if (musicUrl) {
+      fd.append("music_url", musicUrl);
+    }
+    fd.append("framing", framing);
+    fd.append("notes", notes);
+    // Per-clip title: number them when batching, else use the field (or let
+    // the server fall back to the filename).
+    const title = userTitle ? (multi ? `${userTitle} ${i + 1}` : userTitle) : "";
+    fd.append("title", title);
+
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch {}
+        throw new Error(detail || `Upload échoué (${res.status})`);
+      }
+      await res.json();
+      els.jobsSection.classList.remove("hidden");
+      refreshJobs();
+      startJobsPolling();
+    } catch (err) {
+      failures++;
+      console.error(`Upload de ${video.name} échoué:`, err);
+    }
+  }
+
+  els.submit.innerHTML = original;
+  resetForm();
+  if (failures) {
+    alert(`${failures} vidéo(s) sur ${videoFiles.length || failures} n'ont pas pu être envoyées.`);
+  }
 });
 
-els.errorRetry.addEventListener("click", () => goTo("upload"));
-
-// On page load, resume any active job from localStorage.
-const resumeId = localStorage.getItem(ACTIVE_JOB_KEY);
-if (resumeId) {
-  // Quick check: does the job still exist on the server?
-  fetch(`/api/status/${resumeId}`).then((res) => {
-    if (res.ok) {
-      goTo("progress");
-      setProgress(0, "Reprise du job en cours…");
-      pollStatus(resumeId);
-    } else {
-      localStorage.removeItem(ACTIVE_JOB_KEY);
-    }
-  }).catch(() => {
-    // network issue — leave the user on the upload screen
-  });
-}
-
-
 // ---------------------------------------------------------------------------
-// Live system monitor (CPU / RAM / GPU / VRAM)
+// Jobs list — polls /api/jobs and renders one card per job.
 // ---------------------------------------------------------------------------
 
-const sysmon = {
-  root: document.getElementById("sysmon"),
-  cpuBar: document.getElementById("sysmon-cpu-bar"),
-  cpuVal: document.getElementById("sysmon-cpu-val"),
-  ramBar: document.getElementById("sysmon-ram-bar"),
-  ramVal: document.getElementById("sysmon-ram-val"),
-  gpuRow: document.getElementById("sysmon-gpu-row"),
-  gpuBar: document.getElementById("sysmon-gpu-bar"),
-  gpuVal: document.getElementById("sysmon-gpu-val"),
-  vramRow: document.getElementById("sysmon-vram-row"),
-  vramBar: document.getElementById("sysmon-vram-bar"),
-  vramVal: document.getElementById("sysmon-vram-val"),
-  foot: document.getElementById("sysmon-foot"),
-};
+let jobsPoll = null;
+const jobCards = new Map();   // job_id -> { el, refs }
+const jobUi = new Map();      // job_id -> { errorOpen, previewOpen }
 
-function fmtGB(bytes) {
-  if (bytes == null) return "—";
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+function startJobsPolling() {
+  if (jobsPoll) return;
+  jobsPoll = setInterval(refreshJobs, 2000);
 }
 
-function setSysmonBar(bar, valEl, pct, valText) {
-  const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
-  bar.style.width = `${p}%`;
-  bar.classList.toggle("hot", p >= 80);
-  valEl.textContent = valText;
+function stopJobsPolling() {
+  if (jobsPoll) { clearInterval(jobsPoll); jobsPoll = null; }
 }
 
-async function refreshSysmon() {
+async function refreshJobs() {
+  let res, data;
   try {
-    const res = await fetch("/api/sysinfo", { cache: "no-store" });
-    if (!res.ok) return;
-    const d = await res.json();
+    res = await fetch("/api/jobs", { cache: "no-store" });
+  } catch {
+    return; // network blip — keep what we have
+  }
+  if (res.status === 404) {
+    // The running server predates the queue feature → it can't serve this
+    // page's API. Tell the user to restart it.
+    showStaleBanner("ancienne version (pas de file d'attente)");
+    return;
+  }
+  if (!res.ok) return;
+  try {
+    data = await res.json();
+  } catch {
+    return;
+  }
+  // Version mismatch between this page and the running server.
+  if (data.server_version && FRONTEND_VERSION && FRONTEND_VERSION !== "__VERSION__"
+      && data.server_version !== FRONTEND_VERSION) {
+    showStaleBanner(`page v${FRONTEND_VERSION} ≠ serveur v${data.server_version}`);
+  }
+  renderJobs(data);
+}
 
-    setSysmonBar(
-      sysmon.cpuBar, sysmon.cpuVal,
-      d.cpu_pct,
-      `${Math.round(d.cpu_pct)}%`
-    );
-    setSysmonBar(
-      sysmon.ramBar, sysmon.ramVal,
-      d.ram_pct,
-      `${fmtGB(d.ram_used)} / ${fmtGB(d.ram_total)}`
-    );
+const FRONTEND_VERSION =
+  document.querySelector('meta[name="app-version"]')?.content || "";
 
-    if (d.gpu) {
-      sysmon.gpuRow.style.display = "";
-      sysmon.vramRow.style.display = "";
-      if (d.gpu.util_pct == null) {
-        // Fallback (torch) — no util available.
-        setSysmonBar(sysmon.gpuBar, sysmon.gpuVal, null, "n/a");
-      } else {
-        setSysmonBar(
-          sysmon.gpuBar, sysmon.gpuVal,
-          d.gpu.util_pct,
-          `${Math.round(d.gpu.util_pct)}%`
-        );
-      }
-      setSysmonBar(
-        sysmon.vramBar, sysmon.vramVal,
-        d.gpu.mem_pct,
-        `${fmtGB(d.gpu.mem_used)} / ${fmtGB(d.gpu.mem_total)}`
-      );
-      const tempStr = d.gpu.temp_c != null ? ` · ${d.gpu.temp_c}°C` : "";
-      sysmon.foot.textContent = (sysmonHwLine || d.gpu.name) + tempStr;
-    } else {
-      sysmon.gpuRow.style.display = "none";
-      sysmon.vramRow.style.display = "none";
-      sysmon.foot.textContent = sysmonHwLine || `${d.cpu_count} threads · pas de GPU`;
+function showStaleBanner(detail) {
+  const b = document.getElementById("stale-banner");
+  if (!b || !b.classList.contains("hidden")) return;
+  const v = document.getElementById("stale-version");
+  if (v) v.textContent = detail ? `· ${detail}` : "";
+  b.classList.remove("hidden");
+}
+document.getElementById("stale-close")?.addEventListener("click", () => {
+  document.getElementById("stale-banner")?.classList.add("hidden");
+});
+
+function renderJobs(data) {
+  const jobs = data.jobs || [];
+
+  if (jobs.length === 0) {
+    els.jobsSection.classList.add("hidden");
+  } else {
+    els.jobsSection.classList.remove("hidden");
+  }
+
+  // Header meta: how many running / queued, and the concurrency cap.
+  const running = data.running || 0;
+  const queued = data.queued || 0;
+  const cap = data.max_concurrent || 1;
+  const bits = [];
+  if (running) bits.push(`${running} en cours`);
+  if (queued) bits.push(`${queued} en attente`);
+  bits.push(`max ${cap} en parallèle`);
+  if (data.server_version) bits.push(`v${data.server_version}`);
+  els.jobsMeta.textContent = bits.join(" · ");
+
+  const seen = new Set();
+  for (const job of jobs) {
+    seen.add(job.job_id);
+    let entry = jobCards.get(job.job_id);
+    if (!entry) {
+      entry = createJobCard(job);
+      jobCards.set(job.job_id, entry);
+      els.jobsList.appendChild(entry.el);
     }
-  } catch (_e) {
-    // Silently ignore — server might be temporarily unreachable.
+    updateJobCard(entry, job);
+  }
+
+  // Remove cards for jobs the server no longer knows about (deleted).
+  for (const [jid, entry] of jobCards) {
+    if (!seen.has(jid)) {
+      entry.el.remove();
+      jobCards.delete(jid);
+      jobUi.delete(jid);
+    }
+  }
+
+  // Stop polling once everything is in a terminal state (nothing will change).
+  const anyLive = jobs.some((j) => !TERMINAL_STAGES.has(j.stage));
+  if (!anyLive) stopJobsPolling();
+}
+
+function createJobCard(job) {
+  const el = document.createElement("div");
+  el.className = "job-card";
+  el.dataset.job = job.job_id;
+  el.innerHTML = `
+    <div class="job-top">
+      <div class="job-name"></div>
+      <div class="job-badge"></div>
+    </div>
+    <div class="progress-bar"><div class="progress-fill"></div></div>
+    <div class="job-info">
+      <span class="job-msg"></span>
+      <span class="job-elapsed"></span>
+    </div>
+    <div class="job-actions"></div>
+    <div class="job-detail"></div>
+  `;
+  const refs = {
+    name: el.querySelector(".job-name"),
+    badge: el.querySelector(".job-badge"),
+    fill: el.querySelector(".progress-fill"),
+    msg: el.querySelector(".job-msg"),
+    elapsed: el.querySelector(".job-elapsed"),
+    actions: el.querySelector(".job-actions"),
+    detail: el.querySelector(".job-detail"),
+  };
+  jobUi.set(job.job_id, { errorOpen: false, previewOpen: false });
+  return { el, refs };
+}
+
+function updateJobCard(entry, job) {
+  const { el, refs } = entry;
+  const stage = job.stage || "queued";
+  el.dataset.stage = stage;
+
+  const name = job.title?.trim() || job.source_name || `Clip ${job.job_id.slice(0, 6)}`;
+  refs.name.textContent = name;
+
+  refs.badge.textContent = STAGE_LABELS[stage] || stage;
+  refs.badge.className = `job-badge badge-${stage}`;
+
+  const pct = Math.max(0, Math.min(100, Number(job.progress) || 0));
+  refs.fill.style.width = `${pct}%`;
+
+  // Primary status line.
+  if (stage === "queued") {
+    const pos = job.queue_position;
+    refs.msg.textContent = pos
+      ? `En attente · position ${pos}/${job.queue_total}`
+      : "En attente…";
+  } else {
+    refs.msg.textContent = `${pct}% · ${job.message || "…"}`;
+  }
+
+  // Elapsed.
+  const elapsed = job.total_elapsed ?? job.elapsed;
+  refs.elapsed.textContent = (typeof elapsed === "number" && stage !== "queued")
+    ? fmtDuration(elapsed) : "";
+
+  renderJobActions(entry, job);
+  renderJobDetail(entry, job);
+}
+
+function renderJobActions(entry, job) {
+  const { refs } = entry;
+  const stage = job.stage;
+  refs.actions.innerHTML = "";
+
+  const addBtn = (label, cls, onClick) => {
+    const b = document.createElement("button");
+    b.className = `job-btn ${cls}`;
+    b.innerHTML = label;
+    b.addEventListener("click", onClick);
+    refs.actions.appendChild(b);
+    return b;
+  };
+
+  if (stage === "queued") {
+    const pos = job.queue_position || 0;
+    if (pos > 1) addBtn("↑", "icon", () => moveJob(job.job_id, "up"));
+    if (pos > 2) addBtn("⤒", "icon", () => moveJob(job.job_id, "top"));
+    if (pos && job.queue_total && pos < job.queue_total) {
+      addBtn("↓", "icon", () => moveJob(job.job_id, "down"));
+    }
+    addBtn("Annuler", "ghost", () => cancelJob(job.job_id));
+  } else if (stage === "await_seed") {
+    addBtn("✏️ Tracer Kaya", "primary", () => openSeedFor(job.job_id));
+    addBtn("Annuler", "ghost", () => cancelJob(job.job_id));
+  } else if (stage === "done") {
+    const a = document.createElement("a");
+    a.className = "job-btn primary";
+    a.href = `/api/download/${job.job_id}`;
+    a.download = "";
+    a.innerHTML = "⬇ Télécharger";
+    refs.actions.appendChild(a);
+    const ui = jobUi.get(job.job_id);
+    addBtn(ui.previewOpen ? "Masquer" : "▶ Aperçu", "ghost", () => {
+      ui.previewOpen = !ui.previewOpen;
+      renderJobActions(entry, job);
+      renderJobDetail(entry, job);
+    });
+    addBtn("🗑", "icon", () => removeJob(job.job_id));
+  } else if (stage === "error") {
+    const ui = jobUi.get(job.job_id);
+    addBtn(ui.errorOpen ? "Masquer l'erreur" : "Voir l'erreur", "ghost", () => {
+      ui.errorOpen = !ui.errorOpen;
+      renderJobActions(entry, job);
+      renderJobDetail(entry, job);
+    });
+    addBtn("🗑", "icon", () => removeJob(job.job_id));
+  } else if (stage === "cancelled") {
+    addBtn("🗑", "icon", () => removeJob(job.job_id));
+  } else {
+    // Any active running stage (transcribe, track, camera, audio, render…).
+    addBtn("Annuler", "ghost", () => cancelJob(job.job_id));
   }
 }
 
-// One-shot fetch of the static hardware capabilities (encoder name, etc.) so
-// the user sees what backend the pipeline is actually using on their box.
-let sysmonHwLine = "";
-fetch("/api/hardware", { cache: "no-store" })
-  .then(r => r.ok ? r.json() : null)
-  .then(hw => {
-    if (!hw) return;
-    const parts = [];
-    if (hw.cuda && hw.cuda_name) parts.push(hw.cuda_name);
-    else if (hw.mps) parts.push("Apple Silicon");
-    else parts.push("CPU only");
-    parts.push(`enc: ${hw.encoder}`);
-    sysmonHwLine = parts.join(" · ");
-  })
-  .catch(() => {});
+async function moveJob(jobId, direction) {
+  try {
+    await fetch(`/api/jobs/${jobId}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ direction }),
+    });
+  } catch {}
+  refreshJobs();
+}
 
-// Kick off immediately, then poll.
-refreshSysmon();
-setInterval(refreshSysmon, 1500);
+function renderJobDetail(entry, job) {
+  const { refs } = entry;
+  const ui = jobUi.get(job.job_id);
+  const stage = job.stage;
+
+  // Done preview: build the <video> once, keep it alive across polls so it
+  // doesn't reset while the user is watching.
+  if (stage === "done" && ui.previewOpen) {
+    if (!refs.detail.querySelector("video")) {
+      refs.detail.innerHTML = "";
+      const v = document.createElement("video");
+      v.controls = true;
+      v.playsInline = true;
+      v.className = "job-video";
+      v.src = `/api/download/${job.job_id}`;
+      refs.detail.appendChild(v);
+    }
+    return;
+  }
+
+  if (stage === "error" && ui.errorOpen) {
+    if (refs.detail.dataset.kind !== "error") {
+      refs.detail.dataset.kind = "error";
+      const pre = document.createElement("pre");
+      pre.className = "error";
+      pre.textContent = job.message || "Erreur inconnue";
+      refs.detail.innerHTML = "";
+      refs.detail.appendChild(pre);
+    }
+    return;
+  }
+
+  // Otherwise: empty detail.
+  if (refs.detail.childNodes.length) {
+    refs.detail.innerHTML = "";
+    delete refs.detail.dataset.kind;
+  }
+}
+
+async function cancelJob(jobId) {
+  try {
+    await fetch(`/api/cancel/${jobId}`, { method: "POST" });
+  } catch {}
+  refreshJobs();
+}
+
+async function removeJob(jobId) {
+  try {
+    await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+  } catch {}
+  const entry = jobCards.get(jobId);
+  if (entry) { entry.el.remove(); jobCards.delete(jobId); }
+  jobUi.delete(jobId);
+  refreshJobs();
+}
+
+// Kick things off: show whatever jobs the server already has.
+refreshJobs().then(() => {
+  if (jobCards.size) startJobsPolling();
+});
 
 
 // ---------------------------------------------------------------------------
-// Seed picker — drag a bbox over a frame of the source video. The pixel
-// coordinates are sent to the server in source-resolution space.
+// Seed picker — drag a bbox over a frame of the source video. Opens as a
+// modal for whichever job is currently awaiting a seed.
 // ---------------------------------------------------------------------------
 
 let seedJobId = null;
 let seedSrcW = 0, seedSrcH = 0;
 let seedDefaultFrame = 0;
 let seedFps = 60;
-let seedBoxNorm = null;  // {x, y, w, h} in [0,1] image-relative coords
+let seedBoxNorm = null;
 let seedDragging = false;
 let seedDragStart = null;
+
+async function openSeedFor(jobId) {
+  // Need the full status (src dims, seed frame, fps) — the list view omits it.
+  try {
+    const res = await fetch(`/api/status/${jobId}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const st = await res.json();
+    if (!st.await_seed) { refreshJobs(); return; }
+    openSeedPicker(jobId, st);
+  } catch {}
+}
 
 function openSeedPicker(jobId, status) {
   seedJobId = jobId;
@@ -438,35 +551,39 @@ function openSeedPicker(jobId, status) {
   seedBoxNorm = null;
   els.seedSubmit.disabled = true;
 
-  // Slider range = first 20s of the video, default = the auto seed timestamp.
   const defaultT = Math.max(0, seedDefaultFrame / seedFps);
   els.seedTimeSlider.value = defaultT.toFixed(1);
   els.seedTimeVal.textContent = defaultT.toFixed(1);
 
   loadSeedFrame(defaultT);
-  goTo("seed");
+  els.seedModal.classList.remove("hidden");
 }
+
+function closeSeedModal() {
+  els.seedModal.classList.add("hidden");
+  seedJobId = null;
+}
+
+els.seedModalClose?.addEventListener("click", closeSeedModal);
+els.seedModal?.addEventListener("click", (e) => {
+  if (e.target === els.seedModal) closeSeedModal();
+});
 
 async function loadSeedFrame(t) {
   if (!seedJobId) return;
-  // Cache-bust to make sure we re-fetch on every slider step.
   els.seedImg.src = `/api/seed_frame/${seedJobId}?t=${t.toFixed(3)}&_=${Date.now()}`;
 }
 
 els.seedTimeSlider?.addEventListener("input", (e) => {
-  const t = parseFloat(e.target.value);
-  els.seedTimeVal.textContent = t.toFixed(1);
+  els.seedTimeVal.textContent = parseFloat(e.target.value).toFixed(1);
 });
 els.seedTimeSlider?.addEventListener("change", (e) => {
-  const t = parseFloat(e.target.value);
-  loadSeedFrame(t);
-  // Clear any existing bbox — it was on a different frame.
+  loadSeedFrame(parseFloat(e.target.value));
   seedBoxNorm = null;
   redrawSeedCanvas();
   els.seedSubmit.disabled = true;
 });
 
-// Resize canvas to match the displayed image whenever it loads.
 els.seedImg?.addEventListener("load", () => {
   resizeSeedCanvas();
   redrawSeedCanvas();
@@ -512,13 +629,13 @@ els.seedCanvas?.addEventListener("pointermove", (e) => {
 });
 els.seedCanvas?.addEventListener("pointerup", () => {
   seedDragging = false;
-  // Any bbox bigger than 2% of the frame in both dims is valid enough.
   const valid = seedBoxNorm && seedBoxNorm.w > 0.02 && seedBoxNorm.h > 0.02;
   els.seedSubmit.disabled = !valid;
 });
 
 function redrawSeedCanvas() {
   const cv = els.seedCanvas;
+  if (!cv) return;
   const ctx = cv.getContext("2d");
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (!seedBoxNorm) return;
@@ -526,18 +643,15 @@ function redrawSeedCanvas() {
   const y = seedBoxNorm.y * cv.height;
   const w = seedBoxNorm.w * cv.width;
   const h = seedBoxNorm.h * cv.height;
-  // Translucent overlay outside the box.
   ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
   ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.clearRect(x, y, w, h);
-  // Bright pink outline.
   ctx.lineWidth = 3;
   ctx.strokeStyle = "#ff7eb6";
   ctx.shadowColor = "rgba(255, 126, 182, 0.6)";
   ctx.shadowBlur = 12;
   ctx.strokeRect(x, y, w, h);
   ctx.shadowBlur = 0;
-  // Corner ticks.
   ctx.fillStyle = "#ff7eb6";
   const k = 8;
   for (const [cx, cy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
@@ -562,18 +676,103 @@ els.seedSubmit?.addEventListener("click", async () => {
   const w = Math.round(seedBoxNorm.w * seedSrcW);
   const h = Math.round(seedBoxNorm.h * seedSrcH);
   els.seedSubmit.disabled = true;
+  const jid = seedJobId;
   try {
-    const res = await fetch(`/api/seed/${seedJobId}`, {
+    const res = await fetch(`/api/seed/${jid}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ frame, x, y, w, h }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    closeSeedModal();
+    refreshJobs();
+    startJobsPolling();
   } catch (err) {
     els.seedSubmit.disabled = false;
-    showError(`Erreur soumission seed: ${err.message}`);
+    alert(`Erreur soumission seed: ${err.message}`);
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// Live system monitor (CPU / RAM / GPU / VRAM)
+// ---------------------------------------------------------------------------
+
+const sysmon = {
+  root: document.getElementById("sysmon"),
+  cpuBar: document.getElementById("sysmon-cpu-bar"),
+  cpuVal: document.getElementById("sysmon-cpu-val"),
+  ramBar: document.getElementById("sysmon-ram-bar"),
+  ramVal: document.getElementById("sysmon-ram-val"),
+  gpuRow: document.getElementById("sysmon-gpu-row"),
+  gpuBar: document.getElementById("sysmon-gpu-bar"),
+  gpuVal: document.getElementById("sysmon-gpu-val"),
+  vramRow: document.getElementById("sysmon-vram-row"),
+  vramBar: document.getElementById("sysmon-vram-bar"),
+  vramVal: document.getElementById("sysmon-vram-val"),
+  foot: document.getElementById("sysmon-foot"),
+};
+
+function fmtGB(bytes) {
+  if (bytes == null) return "—";
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function setSysmonBar(bar, valEl, pct, valText) {
+  const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  bar.style.width = `${p}%`;
+  bar.classList.toggle("hot", p >= 80);
+  valEl.textContent = valText;
+}
+
+async function refreshSysmon() {
+  try {
+    const res = await fetch("/api/sysinfo", { cache: "no-store" });
+    if (!res.ok) return;
+    const d = await res.json();
+
+    setSysmonBar(sysmon.cpuBar, sysmon.cpuVal, d.cpu_pct, `${Math.round(d.cpu_pct)}%`);
+    setSysmonBar(sysmon.ramBar, sysmon.ramVal, d.ram_pct,
+      `${fmtGB(d.ram_used)} / ${fmtGB(d.ram_total)}`);
+
+    if (d.gpu) {
+      sysmon.gpuRow.style.display = "";
+      sysmon.vramRow.style.display = "";
+      if (d.gpu.util_pct == null) {
+        setSysmonBar(sysmon.gpuBar, sysmon.gpuVal, null, "n/a");
+      } else {
+        setSysmonBar(sysmon.gpuBar, sysmon.gpuVal, d.gpu.util_pct, `${Math.round(d.gpu.util_pct)}%`);
+      }
+      setSysmonBar(sysmon.vramBar, sysmon.vramVal, d.gpu.mem_pct,
+        `${fmtGB(d.gpu.mem_used)} / ${fmtGB(d.gpu.mem_total)}`);
+      const tempStr = d.gpu.temp_c != null ? ` · ${d.gpu.temp_c}°C` : "";
+      sysmon.foot.textContent = (sysmonHwLine || d.gpu.name) + tempStr;
+    } else {
+      sysmon.gpuRow.style.display = "none";
+      sysmon.vramRow.style.display = "none";
+      sysmon.foot.textContent = sysmonHwLine || `${d.cpu_count} threads · pas de GPU`;
+    }
+  } catch (_e) {
+    // Silently ignore — server might be temporarily unreachable.
+  }
+}
+
+let sysmonHwLine = "";
+fetch("/api/hardware", { cache: "no-store" })
+  .then(r => r.ok ? r.json() : null)
+  .then(hw => {
+    if (!hw) return;
+    const parts = [];
+    if (hw.cuda && hw.cuda_name) parts.push(hw.cuda_name);
+    else if (hw.mps) parts.push("Apple Silicon");
+    else parts.push("CPU only");
+    parts.push(`enc: ${hw.encoder}`);
+    sysmonHwLine = parts.join(" · ");
+  })
+  .catch(() => {});
+
+refreshSysmon();
+setInterval(refreshSysmon, 1500);
 
 
 // ───────────────────────────────────────────────────────────────────────
@@ -632,8 +831,6 @@ updateEls.btnUpdate.addEventListener("click", async () => {
     return;
   }
 
-  // Poll the update status until it's done or errors out.
-  let serverWentDown = false;
   const poll = setInterval(async () => {
     try {
       const r = await fetch("/api/update/status");
@@ -644,7 +841,6 @@ updateEls.btnUpdate.addEventListener("click", async () => {
 
       if (st.stage === "done") {
         updateEls.title.textContent = "Redémarrage…";
-        // Wait for the server to come back, then reload the page.
         clearInterval(poll);
         waitForServerThenReload();
       } else if (st.stage === "error") {
@@ -653,16 +849,12 @@ updateEls.btnUpdate.addEventListener("click", async () => {
         updateEls.msg.textContent = st.error || st.message || "Erreur inconnue";
       }
     } catch {
-      // Server is restarting → polls will fail briefly. Mark it and let the
-      // wait-for-comeback logic handle it.
-      serverWentDown = true;
+      // Server is restarting → polls will fail briefly.
     }
   }, 1000);
 });
 
 async function waitForServerThenReload() {
-  // Server exits with code 75 → launcher restarts it. Usually back in <5s.
-  // Try up to 60s, then fall back to a hard reload.
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
     try {
@@ -679,6 +871,5 @@ async function waitForServerThenReload() {
   location.reload();
 }
 
-// Run the update check on load + once an hour after that.
 checkForUpdates();
 setInterval(checkForUpdates, 60 * 60 * 1000);

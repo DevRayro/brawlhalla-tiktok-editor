@@ -11,9 +11,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&family=M+PLUS+Rounded+1c:wght@400;500;700;900&family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <meta name="app-version" content="__VERSION__">
+  <link rel="stylesheet" href="/static/styles.css?v=__VERSION__">
 </head>
 <body>
+  <!-- Stale-server banner — shown when the running server is older than this page -->
+  <div id="stale-banner" class="update-banner hidden" role="status" style="background:linear-gradient(135deg,#ffd266,#ff7eb6)">
+    <span class="ub-icon">⚠️</span>
+    <span class="ub-text">
+      <strong>Serveur à redémarrer</strong>
+      <span id="stale-version"></span>
+    </span>
+    <button class="ub-close" id="stale-close" aria-label="Fermer">✕</button>
+  </div>
+
   <!-- Update banner — hidden by default, shown when a new release is available -->
   <div id="update-banner" class="update-banner hidden" role="status">
     <span class="ub-icon">✨</span>
@@ -55,7 +66,7 @@
       <div class="title-block">
         <div class="kanji">ブロウルハラ・エディター</div>
         <h1>Brawlhalla TikTok Editor</h1>
-        <p class="tagline">てぇへっ <span class="sparkle">✨</span> Dépose ton replay, je te fais un short kawaii ♡</p>
+        <p class="tagline">てぇへっ <span class="sparkle">♡</span> Dépose ton replay, je te fais un short kawaii ♡</p>
       </div>
     </header>
 
@@ -63,18 +74,18 @@
       <h2><span class="num">①</span> Tes fichiers <span class="kawaii">(｡•ᴗ•｡)</span></h2>
 
       <label class="dropzone" id="video-drop">
-        <input type="file" id="video-input" accept="video/*" hidden>
+        <input type="file" id="video-input" accept="video/*" multiple hidden>
         <div class="dz-icon">🎮</div>
-        <div class="dz-title">Vidéo replay <span class="req">*</span></div>
-        <div class="dz-hint">glisse-dépose ou clique · MP4 / MOV / MKV</div>
+        <div class="dz-title">Vidéo(s) replay <span class="req">*</span></div>
+        <div class="dz-hint">glisse-dépose une ou plusieurs · MP4 / MOV / MKV</div>
         <div class="dz-file" id="video-name"></div>
       </label>
 
       <label class="dropzone secondary" id="music-drop">
-        <input type="file" id="music-input" accept="audio/*" hidden>
+        <input type="file" id="music-input" accept="audio/*" multiple hidden>
         <div class="dz-icon">🎀</div>
-        <div class="dz-title">Musique de fond <span class="opt">facultatif</span></div>
-        <div class="dz-hint">MP3 / WAV / M4A</div>
+        <div class="dz-title">Musique(s) de fond <span class="opt">facultatif</span></div>
+        <div class="dz-hint">MP3 / WAV / M4A · plusieurs = tirage aléatoire par vidéo</div>
         <div class="dz-file" id="music-name"></div>
         <div class="music-url" onclick="event.stopPropagation()">
           <span class="music-url-icon">🔗</span>
@@ -89,6 +100,11 @@
 
       <div class="row">
         <label class="field">
+          <span>Nom du clip <span class="opt">facultatif</span></span>
+          <input type="text" id="title" placeholder="ex: Kaya 1v1 ringout fou"
+            autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
           <span>Cadrage</span>
           <select id="framing">
             <option value="wide" selected>Large 〜 toute l'action visible</option>
@@ -97,80 +113,54 @@
         </label>
       </div>
 
-      <details class="advanced">
-        <summary>Notes pour l'IA <span class="kawaii">＾• ω •＾</span></summary>
-        <textarea id="notes" rows="4" placeholder="Termes spécifiques à reconnaitre, moments-clés à mettre en avant, etc."></textarea>
-      </details>
-
       <button class="btn btn-primary" id="submit-btn" disabled>
         <span class="btn-cat">ᓚᘏᗢ</span>
-        <span>Lancer l'édition</span>
+        <span>Ajouter à la file</span>
         <span class="btn-cat">ᓚᘏᗢ</span>
       </button>
     </section>
 
-    <section id="step-progress" class="card hidden">
-      <h2>En cours… <span class="kawaii spin-bounce">(｡•ᴗ•｡)</span></h2>
-      <div class="progress-wrap">
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill"></div>
-          <span class="progress-cat" id="progress-cat">＾• ω •＾</span>
+    <section id="jobs-section" class="card hidden">
+      <div class="jobs-header">
+        <h2>Mes clips <span class="kawaii">(=^･ω･^=)</span></h2>
+        <div class="jobs-meta" id="jobs-meta"></div>
+      </div>
+      <div id="jobs-list" class="jobs-list"></div>
+    </section>
+
+    <!-- Seed picker modal (tight mode only) -->
+    <div id="seed-modal" class="seed-modal hidden" role="dialog" aria-modal="true">
+      <div class="seed-modal-card">
+        <button class="seed-modal-close" id="seed-modal-close" aria-label="Fermer">✕</button>
+        <h2>Trace Kaya <span class="kawaii">(=^･ω･^=)</span></h2>
+        <p class="seed-hint">
+          Glisse pour dessiner un rectangle autour de Kaya sur la frame ci-dessous.
+          SAM2 va le suivre pour toute la vidéo.
+        </p>
+
+        <div class="seed-controls">
+          <label class="seed-time-label">
+            <span>Frame à <span id="seed-time-val">1.0</span>s</span>
+            <input type="range" id="seed-time-slider"
+              min="0" max="20" step="0.1" value="1.0">
+          </label>
         </div>
-        <div class="progress-text" id="progress-text">Préparation…</div>
+
+        <div class="seed-canvas-wrap" id="seed-canvas-wrap">
+          <img id="seed-img" alt="seed frame">
+          <canvas id="seed-canvas"></canvas>
+        </div>
+
+        <div class="seed-actions">
+          <button class="btn btn-ghost" id="seed-clear">Effacer <span class="kawaii">(´• ω •`)</span></button>
+          <button class="btn btn-primary" id="seed-submit" disabled>
+            <span class="btn-cat">ᓚᘏᗢ</span>
+            <span>Lancer le tracking</span>
+            <span class="btn-cat">ᓚᘏᗢ</span>
+          </button>
+        </div>
       </div>
-      <div class="progress-stage" id="progress-stage"></div>
-      <div class="progress-elapsed" id="progress-elapsed"></div>
-      <p class="hint">Tu peux fermer la page, ton job continue. Reviens plus tard, on reprend où on en était. (◕ᴗ◕✿)</p>
-    </section>
-
-    <section id="step-seed" class="card hidden">
-      <h2>Trace Kaya <span class="kawaii">(=^･ω･^=)</span></h2>
-      <p class="seed-hint">
-        Glisse pour dessiner un rectangle autour de Kaya sur la frame ci-dessous.
-        SAM2 va le suivre pour toute la vidéo.
-      </p>
-
-      <div class="seed-controls">
-        <label class="seed-time-label">
-          <span>Frame à <span id="seed-time-val">1.0</span>s</span>
-          <input type="range" id="seed-time-slider"
-            min="0" max="20" step="0.1" value="1.0">
-        </label>
-      </div>
-
-      <div class="seed-canvas-wrap" id="seed-canvas-wrap">
-        <img id="seed-img" alt="seed frame">
-        <canvas id="seed-canvas"></canvas>
-      </div>
-
-      <div class="seed-actions">
-        <button class="btn btn-ghost" id="seed-clear">Effacer <span class="kawaii">(´• ω •`)</span></button>
-        <button class="btn btn-primary" id="seed-submit" disabled>
-          <span class="btn-cat">ᓚᘏᗢ</span>
-          <span>Lancer le tracking</span>
-          <span class="btn-cat">ᓚᘏᗢ</span>
-        </button>
-      </div>
-    </section>
-
-    <section id="step-done" class="card hidden">
-      <h2>Ta vidéo est prête <span class="kawaii">♡(˙꒳​˙)♡</span></h2>
-      <video id="result-video" controls playsinline></video>
-      <div class="timing-summary" id="timing-summary"></div>
-      <div class="actions">
-        <a id="download-link" class="btn btn-primary" download>
-          <span>Télécharger</span>
-          <span class="btn-cat">⌒(ㅇㅅㅇ❀)⌒</span>
-        </a>
-        <button class="btn btn-ghost" id="restart-btn">Nouveau clip <span class="kawaii">(=^･ω･^=)</span></button>
-      </div>
-    </section>
-
-    <section id="step-error" class="card hidden">
-      <h2>Aïe <span class="kawaii">(╥﹏╥)</span></h2>
-      <pre id="error-text" class="error"></pre>
-      <button class="btn btn-ghost" id="error-retry">Réessayer (◔◡◔)</button>
-    </section>
+    </div>
 
     <footer>
       <span>made with</span>
@@ -204,6 +194,6 @@
     <div class="sysmon-foot" id="sysmon-foot">…</div>
   </aside>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=__VERSION__"></script>
 </body>
 </html>

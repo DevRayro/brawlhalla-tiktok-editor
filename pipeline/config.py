@@ -13,6 +13,12 @@ OUTPUT_DIR = ROOT / "output"
 WORK_DIR = ROOT / "work"
 REMOTION_DIR = ROOT / "remotion"
 
+# Shared cache for source-only expensive artefacts (transcription, tracking,
+# extracted frames). Keyed by source-file hash so the SAME video re-uploaded
+# in a different job reuses the work instead of redoing it. Job-specific
+# artefacts (audio mix, composite, render) stay in each job's own work dir.
+CACHE_DIR = ROOT / "_cache"
+
 # --- Output spec ---
 OUT_W = 1080
 OUT_H = 1920

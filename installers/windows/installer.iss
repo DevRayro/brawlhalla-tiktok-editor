@@ -9,7 +9,7 @@
 ;     missing .install-complete marker and runs the first-run GUI.
 
 #define AppName "Brawlhalla TikTok Editor"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.16"
 #define AppPublisher "Brawlhalla TikTok Editor contributors"
 #define AppExeName "start.bat"
 
@@ -45,7 +45,7 @@ Source: "app.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Ship every text/code asset, but skip the heavy artefacts that get
 ; populated at first-run (or that don't exist in CI).
 Source: "..\..\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; \
-  Excludes: "\.git\*,\.venv\*,_local_jobs\*,output\*,work\*,models\*.pt,models\*.pth,remotion\node_modules\*,remotion\public\*-base.mp4,remotion\public\*-source.mp4,remotion\public\*-audio.m4a,dist\*,installers\dist\*,*.pyc,__pycache__\*"
+  Excludes: "\.git\*,\.venv\*,_local_jobs\*,_cache\*,output\*,work\*,models\*.pt,models\*.pth,remotion\node_modules\*,remotion\public\*-base.mp4,remotion\public\*-source.mp4,remotion\public\*-audio.m4a,dist\*,installers\dist\*,*.pyc,__pycache__\*"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"
@@ -64,6 +64,7 @@ Filename: "{app}\{#AppExeName}"; Description: "Lancer {#AppName}"; Flags: nowait
 Type: filesandordirs; Name: "{app}\.venv"
 Type: filesandordirs; Name: "{app}\models"
 Type: filesandordirs; Name: "{app}\_local_jobs"
+Type: filesandordirs; Name: "{app}\_cache"
 Type: filesandordirs; Name: "{app}\remotion\node_modules"
 Type: filesandordirs; Name: "{app}\remotion\public"
 Type: files;          Name: "{app}\.install-complete"
