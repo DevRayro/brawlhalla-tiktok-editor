@@ -9,7 +9,7 @@
 ;     missing .install-complete marker and runs the first-run GUI.
 
 #define AppName "Brawlhalla TikTok Editor"
-#define AppVersion "1.0.16"
+#define AppVersion "1.0.15"
 #define AppPublisher "Brawlhalla TikTok Editor contributors"
 #define AppExeName "start.bat"
 
